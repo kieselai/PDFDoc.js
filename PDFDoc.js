@@ -118,7 +118,8 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }
             setProperties.call(this, {
                 position        : this.position    || s.positions       || null,
-                Border          : this.Border      || s.Border          || gs.Border  || true,
+                Border          : this.Border      || s.Border          || gs.Border  
+                                                   || s.border          || gs.border || false,
                 margin          : new Offset ( this.margin || s.margin  || { all: 0 }),
                 overflowAction  : s.overflowAction || gs.overflowAction || "split",
                 padding         : new Offset ( this.padding || s.padding || { all: 0 }),
@@ -191,14 +192,17 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             return this;
         };
         this.parseContent = function(content){
+            console.log("CONTENT: ");
+            console.log(typeof content);
+            console.log(this);
             if ( _.isObject( content ) && ( content.baseClass === PDFBase || content.baseClass === PDFSection )){
                 if ( _.isUndefined(this.initSettings) ){
                     content.initialize(this.inheritedSettings);
                 }
                 return content;
             }
-            else if ( _.isString( content )){
-                return new TextSection({}, this.inheritedSettings).addContent(content);
+            else if ( _.isString( content ) ||  _.isNumber(content)){
+                return new TextSection({}, this.inheritedSettings).addContent(""+content);
             }
             else if ( _.isObject ( content ) && (_.has(content, "type") || _.has(content, "image"))) {
                 if ( _.has(content, "image") ){
@@ -257,6 +261,9 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
     
         this.splitToWidth = function( availableWidth ){
+            if ( this.initSettings ){
+                this.initialize();
+            }
             if ( _.isNumber( this.fixedWidth ) ){
                 availableWidth = Math.min( this.fixedWidth, availableWidth );
             }
@@ -330,7 +337,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         this.renderBorderAndFill = function(renderSpace){
             var drawDim   = renderSpace.clone();
             var hasFill   = _.has(this, "FillColor");
-            var hasBorder = _.has(this, "Border");
+            var hasBorder = _.has(this, "Border") && this.Border === true;
             var borderStyles = this.getBorderStyles();
             if ( hasFill || hasBorder ){
                 this.setStyles( borderStyles );
@@ -367,7 +374,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             drawDim.offset( this.padding );
             var contentSpace = drawDim.clone();
             _.forEach(this.content, function(section){
-                var sectionSpace = _.isUndefined(section.position) || _.isNull(section.pos)
+                var sectionSpace = _.isUndefined(section.position) || _.isNull(section.position)
                     ? drawDim.clone()
                     : contentSpace.clone().translate(section.position.x1, section.position.y1);
                 section.render(sectionSpace.setHeight( section.getHeight()).setWidth(section.getWidth()));
@@ -487,12 +494,20 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
         this.addContent = function(content){
             this.content = this.content || [];
-            if ( _.isUndefined(content))
-                return this;
+            if ( _.isUndefined(content) || _.isNull(content))
+                content = "";
+            if ( _.isNumber( content )){
+                content = ""+content;
+            }
             if ( _.isArray( content ) && content.length > 0 ){
                 var allString = true;
                 var allTextWrap = true;
                 _.forEach( content, function(line){
+                    if ( _.isNumber(line))
+                        line = ""+line;
+                    if ( _.isUndefined(line) || _.isNull(line)){
+                        line = "";
+                    }
                     allString = ( allString? _.isString( line ) : false );
                     allTextWrap = (allTextWrap? _.isObject(line) && line.constructor === TextWrapper : false);
                 });
@@ -502,9 +517,9 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                         : content;
                 }
             }
-            else if ( _.isString( content ) || _.isObject(content) && content.constructor === TextWrapper ){
+            else if ( _.isString( content ) || _.isNumber(content) || _.isObject(content) && content.constructor === TextWrapper ){
                 content = _.isString( content )
-                    ? [ new TextWrapper(this).setContent(content) ]
+                    ? [ new TextWrapper(this).setContent(""+content) ]
                     : [ content ];
             }
                 
@@ -529,7 +544,8 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         return this;
     };
 
-    RowSection.prototype = (function()         this.initialize = function(globalSettings){
+    RowSection.prototype = (function() {
+        this.initialize = function(globalSettings){
             PDFSection.prototype.initialize.call(this, globalSettings);
             this.initializeChildren();
             return this;
@@ -696,15 +712,20 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                 y: drawSpace.y1,
                 w: this.position.getWidth(),
                 h: this.position.getHeight()});
-
-
-            PDF.addImage({
-                imageData: this.image, 
-                x: drawSpace.x1,
-                y: drawSpace.y1,
-                w: this.position.getWidth(),
-                h: this.position.getHeight()
-            });
+            var uri = this.image.getURI();
+            var format = uri.substring(12,15)==="png"
+                ? "png"
+                : "jpg";
+            this.position.setWidth(this.image.width), 
+            this.position.setHeight(this.image.height)
+            PDF.addImage(
+                this.image.getURI(), 
+                format, 
+                drawSpace.x1, 
+                drawSpace.y1, 
+                this.position.getWidth(), 
+                this.position.getHeight()
+            );
             delete this.FillColor;
             this.Border = false;
 
@@ -737,7 +758,6 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         return this;
     }).call(Object.create(PDFSection.prototype));
 
-
     //TextMap, for conveniently placing text over a(n) background image(s) or nothing at all
     function TextMap( settings ){
         PDFSection.call( this, settings );
@@ -752,19 +772,36 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
         // Add text at position
         this.add = function(content, x, y, w){
-            if ( _.isArray(content) ){
-                _.forEach(content, function(c){
-                    this.add(c, x, y, w);
-                }.bind(this));
+            if ( _.isArray(x) && x.length ==2){
+                w = y;
+                y = x[1];
+                x = x[0];
             }
-            else{
-                this.addContent({ type: "text", content: content, position: new Dimensions({ x1: x, width: w, y1: y}) });
-            }
+            this.addContent({ 
+                type: "text", 
+                content: content, 
+                position: new Dimensions({ x1: x, y1: y, width: w}),
+                Border: false
+            });
             return this;
         };
+
         // Add an image at the given position
         this.addImage = function(imageData, x, y, w, h, angle){
-            this.addContent({ image: imageData, position: { x1: x, y1: y, width: w, height: h }, angle: angle });
+            if ( _.isArray(x) && x.length ==2){
+                angle = h;
+                h = w;
+                y = x[1];
+                x = x[0];
+            }
+            
+            this.addContent(new ImageSection({
+                image: imageData,
+                position: new Dimensions({ x1: x, y1: y, width: w, height: h }), 
+                angle: angle,
+                Border: false
+            }));
+            
             return this;
         };
         this.constructor = TextMap;
@@ -1049,73 +1086,31 @@ function Dimensions( _dim, _x2, _y1, _y2 ) {
     }.bind(this);
 }
 
-var report = new PDFDocument({
-    reportTitle: 'Hi',
-    Border: true,
-    margin: { all: 30 }, 
-    inheritedSettings: {
-        linePadding: { top: -2, left: 5, bottom: 5, right: 5 },
-        padding: { all: 3}
-    }
-})
-.setHeader({type: 'text', content: 'HEADER'})
-.setFooter({type: 'text', content: 'FOOTER', offsetFromBottom: true });
-var row = new RowSection().addContent(
-        [   new TextSection({ padding: {top:100} }, report).addContent( 'Line 1 ----------------------------------------------------------' ),
-            new TextSection({ padding: {top:100} }, report).addContent( 'Line 2 ----------------------------------------------------------' ),
-            new TextSection({ padding: {top:100} }, report).addContent( 'Line 3 ----------------------------------------------------------' ),
-            new TextSection({ padding: {top:100} }, report).addContent( 'Line 4 ----------------------------------------------------------' ),
-            new TextSection({ padding: {top:100} }, report).addContent( 'Line 5 ----------------------------------------------------------' ),
-            new TextSection({ padding: {top:100} }, report).addContent( 'Line 6 ----------------------------------------------------------' ),
-            new TextSection({ padding: {top:100} }, report).addContent( 'Line 7 ----------------------------------------------------------' )
-    ]).setHeader(
-        new RowSection({TextColor: [99, 107, 53 ]}).addContent(
-        [   new TextSection({ padding: {all:3} }, report).addContent( 'Heading 1' ).setHeader(new TextSection({TextColor: [0, 0, 0 ], ignorePadding:true}).addContent( "Super Heading" )),
-            new TextSection({ padding: {all:3} }, report).addContent( 'Heading 2' ).setHeader(new TextSection({TextColor: [0, 0, 0 ], ignorePadding:true}).addContent( "Super Heading" )),
-            new TextSection({ padding: {all:3} }, report).addContent( 'Heading 3' ).setHeader(new TextSection({TextColor: [0, 0, 0 ], ignorePadding:true}).addContent( "Super Heading" )),
-            new TextSection({ padding: {all:3} }, report).addContent( 'Heading 4' ).setHeader(new TextSection({TextColor: [0, 0, 0 ], ignorePadding:true}).addContent( "Super Heading" )),
-            new TextSection({ padding: {all:3} }, report).addContent( 'Heading 5' ).setHeader(new TextSection({TextColor: [0, 0, 0 ], ignorePadding:true}).addContent( "Super Heading" )),
-            new TextSection({ padding: {all:3} }, report).addContent( 'Heading 6' ).setHeader(new TextSection({TextColor: [0, 0, 0 ], ignorePadding:true}).addContent( "Super Heading" )),
-            new TextSection({ padding: {all:3} }, report).addContent( 'Heading 7' ).setHeader(new TextSection({TextColor: [0, 0, 0 ], ignorePadding:true}).addContent( "Super Heading" ))
-    ])
-    );
-var t = new TextSection({ padding: {top:100} }, report)
-            .addContent( "adsfgfdjhku dsja  asdfjfdsap'saodf p'asodf psad'o fsap'do gfd,m lkgfdsj lkjfdgs;lk jdfsgl;kdsfjg dl;fsk" );
-
-report
-    .addContent(t.clone()).initialize();
- var URI = false;
- URI = report.uri();
- setURI();
- function setURI(){
-     if(URI === false || $("iframe").length < 1){
-         setTimeout(setURI, 100);
-     }
-     else {
-         $("iframe").attr("src", URI);
-     }
- }
-
-
-function ImageData(image) {
+function ImageData(image, width, height) {
     this.image     = new Image();
     this.image.src = image;
     this.image.onload = function(){
-        this.width = this.image.naturalWidth;
-        this.height = this.image.naturalHeight;
+        this.width  = width  || this.image.naturalWidth;
+        if (width && !height){
+            var scale = width / this.image.naturalWidth;
+            this.height = this.image.naturalHeight * scale;
+        }
+        else {
+            this.height = height || this.image.naturalHeight;
+        }
     }.bind(this);
-    this.getURI = function(width, height, format, quality){
-        // width  = width  || this.width;
-        // height = height || this.height;
-        // var canvas  = document.createElement('canvas');
-        // var context = canvas.getContext('2d');
-        // if ( format !== "png" && format !== "jpeg")
-        //     format = "png";
-        // format = "image/" + (format || "png");
-        // canvas.width  = width;
-        // canvas.height = height;
-        // context.drawImage(this.image, 0, 0, width, height);
-        // return canvas.toDataURL(format, quality);
-    };
+    this.getURI = function(format, quality){
+        var width   = this.image.naturalWidth;
+        var height  = this.image.naturalHeight;
+        var canvas  = document.createElement('canvas');
+        var context = canvas.getContext('2d');
+        if ( format !== "png" && format !== "jpeg")
+            format = "png";
+        format = "image/" + (format || "png");
+        canvas.width  = width;
+        canvas.height = height;
+        context.drawImage(this.image, 0, 0, width, height);
+        return canvas.toDataURL(format, quality);
+    }
     return this;
 }
