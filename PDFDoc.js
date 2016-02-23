@@ -20,7 +20,6 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
     */
     function PDFBase (settings){
         this.initSettings = settings;
-        this.baseClass  = PDFBase;  // This is overridden for the PDFSection classes, but not the TextWrapper
     }
     (function() {
         this.initialize = function(globalSettings){
@@ -36,14 +35,14 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }
     
             return setProperties.call(this, {
+                overflowAction:           s.overflowAction || gs.overflowAction || "split",
                 ignorePadding:            s.ignorePadding || gs.ignorePadding || false,
                 fixedWidth  :             s.fixedWidth    || null,
                 width       :             this.width      || s.width         || null,
                 Font        :             s.Font          || gs.Font         || 'courier',
                 FontSize    :             s.FontSize      || gs.FontSize     || 10,
                 DrawColor   :             s.DrawColor     || gs.DrawColor    || [0, 0, 0],
-                linePadding : new Offset (s.linePadding   || gs.linePadding  || { all: 0 } ),
-                overflowAction : "split", 
+                linePadding : new Offset (s.linePadding   || gs.linePadding  || { all: 0 } )
             });
         };
         this.getStyles = function(){
@@ -87,8 +86,12 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }
         };
         this.getWidth = function(){
+            if ( this.constructor === ImageSection ){
+                this.width = this.image.width;
+            }
             return this.width;
         };
+        this.baseClass  = PDFBase;  // This is overridden for the PDFSection classes, but not the TextWrapper
         this.constructor = PDFBase;
     }).call(PDFBase.prototype);
 
@@ -122,8 +125,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                                                    || s.border          || gs.border || false,
                 margin          : new Offset ( this.margin || s.margin  || { all: 0 }),
                 overflowAction  : s.overflowAction || gs.overflowAction || "split",
-                padding         : new Offset ( this.padding || s.padding || { all: 0 }),
-                baseClass   : PDFSection
+                padding         : new Offset ( this.padding || s.padding || { all: 0 })
             });
             return this;
         };
@@ -249,6 +251,10 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         this.getHeight = function(){
             var contentHeight = 0;
             var max = 0;
+            // if an image is defined (ImageSection), then start with the image height
+            if ( this.image ){
+                contentHeight = this.image.height;
+            }
             _.forEach( this.content, function(section) {
                 if ( section.position ){
                     max = Math.max(section.getHeight(), max);
@@ -292,6 +298,8 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
 
         this.splitToHeight = function( availableSpace, nextPageSpace ) {
+            console.log("splitting");
+            console.log(this);
             var orig = availableSpace.clone();
             PDF.setFont(this.Font);
             PDF.setFontSize(this.FontSize);
@@ -390,6 +398,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }.bind(this));
             return this;
         };
+        this.baseClass   = PDFSection;
         this.constructor = PDFSection;
 
         return this;
@@ -499,7 +508,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                 return h + PDF.internal.getLineHeight();
             }
             else return h;
-        }
+        };
         this.addContent = function(content){
             this.content = this.content || [];
             if ( _.isUndefined(content) || _.isNull(content))
@@ -683,7 +692,15 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         this.constructor = ColumnSection;
     }).call(Object.create(PDFSection.prototype));
 
-    ImageSection = function(settings){     
+    ImageSection = function(settings){
+        if ( _.isString(settings.image) || ( settings.image && settings.image.constructor === ImageData ) ){
+            this.image = _.isString(settings.image)
+                ?  new ImageData(settings.image, settings.width)
+                :  settings.image;
+        }
+        else {
+            this.image = null;
+        }
         PDFSection.call( this, settings );
        return this;
     };
@@ -694,9 +711,9 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             var gs = globalSettings          || {};
             PDFSection.prototype.initialize.call(this, gs);
             setProperties.call(this, {
-                image   : s.image || null,
                 position  : new Dimensions(s.position || {x1: 0, y1: 0, width: 0, height: 0}),
-                angle     : s.angle || 0
+                angle     : s.angle || 0,
+                overflowAction : s.overflowAction || "newPage"
             });
             this.initializeChildren();
             return this;
@@ -724,8 +741,8 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             var format = uri.substring(12,15)==="png"
                 ? "png"
                 : "jpg";
-            this.position.setWidth(this.image.width), 
-            this.position.setHeight(this.image.height)
+            this.position.setWidth(this.image.width);
+            this.position.setHeight(this.image.height);
             PDF.addImage(
                 this.image.getURI(), 
                 format, 
@@ -762,6 +779,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }
             return this;
         };
+
         this.constructor = ImageSection;
         return this;
     }).call(Object.create(PDFSection.prototype));
@@ -774,13 +792,16 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
 
     TextMap.prototype = (function(){
         this.initialize = function(globalSettings){
-            PDFSection.prototype.initialize.call(this, globalSettings);
+            var s  = this.initSettings       || {};
+            var gs = globalSettings          || {};
+            PDFSection.prototype.initialize.call(this, gs);
+            this.overflowAction = s.overflowAction || "newPage";
             this.initializeChildren();
             return this;
         };
         // Add text at position
         this.add = function(content, x, y, w){
-            if ( _.isArray(x) && x.length ==2){
+            if ( _.isArray(x) && x.length ===2){
                 w = y;
                 y = x[1];
                 x = x[0];
@@ -796,7 +817,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
 
         // Add an image at the given position
         this.addImage = function(imageData, x, y, w, h, angle){
-            if ( _.isArray(x) && x.length ==2){
+            if ( _.isArray(x) && x.length ===2){
                 angle = h;
                 h = w;
                 y = x[1];
@@ -805,7 +826,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             
             this.addContent(new ImageSection({
                 image: imageData,
-                position: new Dimensions({ x1: x, y1: y, width: w, height: h }), 
+                position: new Dimensions({ x1: x, y1: y, width: w || imageData.width, height: h || imageData.height }), 
                 angle: angle,
                 Border: false
             }));
@@ -813,6 +834,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             return this;
         };
         this.constructor = TextMap;
+
         return this;
     }).call( Object.create( PDFSection.prototype ));
 
@@ -826,6 +848,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             contentSpace : settings.contentSpace.clone(),
             pageFormat   : settings.pageFormat
         });
+        delete this.initSettings;
         return this;
     }
     PDFPage.prototype = Object.create(PDFSection.prototype);
@@ -849,35 +872,50 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             return this.currentPage;
         };
         this.render = function(){
-            PDF = new jsPDF('portrait', 'pt', 'letter');
-            for ( var i = 0; i < this.pages.length; i++){
-                var page = this.pages[i];
-                page.render(page.documentSpace.clone());
-                if ( i !== this.pages.length - 1){
-                    PDF.addPage();
+            this.rendering = true;
+            var waitForInit = new Promise(function(accept){
+                var notifyInitialized = function(){
+                    if ( this.isInitializing ) 
+                        setTimeout(notifyInitialized.bind(this), 1000);
+                    else 
+                        accept(true);
+                }.bind(this);
+                notifyInitialized();
+            }.bind(this));
+
+            waitForInit.then(function(){
+                PDF = new jsPDF('portrait', 'pt', 'letter');
+                for ( var i = 0; i < this.pages.length; i++){
+                    var page = this.pages[i];
+                    page.render(page.documentSpace.clone());
+                    console.log(page);
+                    if ( i !== this.pages.length - 1){
+                        PDF.addPage();
+                    }
+                    console.log("Finished");
                 }
-            }
+                console.log("Made it");
+                $(document).trigger("renderComplete");
+            }.bind(this));
             return this;
         };
 
         this.save = function(fileName){
             fileName = fileName || "document.pdf";
-            this.render();
             PDF.save(fileName);
         };
     
         this.uri = function(){
-            this.render();
             return PDF.output("datauristring");
         };
     
         this.newWindow = function(){
-            this.render();
             PDF.output("datauri");
         };
     
     
         this.initialize = function() {
+            this.isInitializing = true;
             PDFSection.prototype.initialize.call(this);
             var s = this.initSettings || {};
             setProperties.call(this, {
@@ -889,44 +927,82 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             });
             this.pageSpace = this.documentSpace.clone().offset( this.margin );
             var width = this.pageSpace.clone().offset(this.padding).getWidth();
-            this.initializeChildren();
-            if ( this.Header ){
-                this.Header.splitToWidth(width + (this.Header.ignorePadding? this.padding.horizontalSum() : 0 ));
-            }
+            var notifyImagesLoaded = function(el){
+                var ready = true;
+                if ( _.isObject(el) ){
+                    if( el.constructor === ImageSection && _.isObject(el.image) ){
+                        if ( _.isFinite(el.image.width)  && el.image.width > 0 ){
+                            el.width = el.image.width;
+                            el.height = el.image.height;
+                        }
+                        else {
+                            return false;
+                        }
+                    }
+                    if ( el.baseClass === PDFSection ){
+                        console.log("is a PDFSection");
+                        console.log(this);
+                        _.forEach(el.content, function(c){
+                            console.log("Checking: ");
+                            console.log(c);
+                            console.log(!notifyImagesLoaded(c));
+                            if (!notifyImagesLoaded(c))
+                                ready = false;
+                        });
+                    }
+                }
+                return ready;
+            };
 
-            if ( this.isPDFSection(this.Footer)){
-                this.Footer.splitToWidth(width + (this.Footer.ignorePadding? this.padding.horizontalSum() : 0 ));
-            }
+            var waitForImages = new Promise(function(accept){
+                var checkImagesLoaded = function(){
+                    if ( notifyImagesLoaded(this) ){
+                        accept( true );
+                    }
+                    else {
+                        setTimeout(checkImagesLoaded, 1000);
+                    }
+                }.bind(this);
+                checkImagesLoaded();
+            }.bind(this));
 
-            
-            
-            this.contentSpace = this.pageSpace.clone().offset({ top: this.getHeaderHeight(), bottom: this.getFooterHeight() });
-            this.addPage();
+            waitForImages.then( function(){
+                if ( this.Header )
+                    this.Header.splitToWidth(width + (this.Header.ignorePadding? this.padding.horizontalSum() : 0 ));    
+                if ( this.isPDFSection(this.Footer))
+                    this.Footer.splitToWidth(width + (this.Footer.ignorePadding? this.padding.horizontalSum() : 0 ));
+
+                this.contentSpace = this.pageSpace.clone().offset({ top: this.getHeaderHeight(), bottom: this.getFooterHeight() });
+                this.addPage();
     
-            _.forEach(this.content, function(section){
-                section.splitToWidth(width);
-                var page = this.currentPage;
-                var result = section.splitToHeight(page.contentSpace.clone(), page.pageSpace.clone());
-                if ( result.status !== "newPage" && result.toAdd.getHeight() > page.contentSpace.getHeight())
-                    throw "Over page bounds";
-                while ( result.status !== "normal" ) {
-                    if ( result === "split" || result === "forcedSplit"){
-                        page.addContent( result.toAdd );
+               _.forEach(this.content, function(section){
+                   section.splitToWidth(width);
+                    var page = this.currentPage;
+                    var result = section.splitToHeight(page.contentSpace.clone(), page.pageSpace.clone());
+                    if ( result.status !== "newPage" && result.toAdd.getHeight() > page.contentSpace.getHeight())
+                        throw "Over page bounds";
+                    while ( result.status !== "normal" ) {
+                        if ( result === "split" || result === "forcedSplit"){
+                          page.addContent( result.toAdd );
+                          page.contentSpace.offset( { y1: result.toAdd.getHeight() });
+                        }
+                        // Executes for both "split" and "newPage" results
+                        page = this.addPage();
+                        result = result.overflow.splitToHeight( page.contentSpace, page.pageSpace );
+                    }
+                    if ( result.status === "normal"){
+                        this.currentPage.addContent( result.toAdd );
                         page.contentSpace.offset( { y1: result.toAdd.getHeight() });
                     }
-                    // Executes for both "split" and "newPage" results
-                    page = this.addPage();
-                    result = result.overflow.splitToHeight( page.contentSpace, page.pageSpace );
-                }
-                if ( result.status === "normal"){
-                    this.currentPage.addContent( result.toAdd );
-                    page.contentSpace.offset( { y1: result.toAdd.getHeight() });
-                }
+                }.bind(this));
+                if( this.currentPage.content.length > 0)
+                    this.addPage();
+                delete this.isInitializing;
             }.bind(this));
-            if( this.currentPage.content.length > 0)
-                this.addPage();
+            
             return this;
         };
+            
         this.constructor = PDFDocument;
         
         return this;
@@ -1108,17 +1184,34 @@ function ImageData(image, width, height) {
         }
     }.bind(this);
     this.getURI = function(format, quality){
+        if ( this.URI ){
+            return this.URI;
+        }
         var width   = this.image.naturalWidth;
         var height  = this.image.naturalHeight;
         var canvas  = document.createElement('canvas');
         var context = canvas.getContext('2d');
         if ( format !== "png" && format !== "jpeg")
             format = "png";
-        format = "image/" + (format || "png");
+        format = "image/jpeg"; //+ (format || "png");
         canvas.width  = width;
         canvas.height = height;
         context.drawImage(this.image, 0, 0, width, height);
-        return canvas.toDataURL(format, quality);
-    }
+        this.URI = canvas.toDataURL(format, quality);
+        return this.URI;
+    };
     return this;
 }
+
+var a = new ImageData("Mushroom2.PNG", 300);
+
+
+
+var doc = new PDFDocument();
+$(document).on("renderComplete", function(){
+    // var blob = PDF.output("blob");
+    // window.open(URL.createObjectURL(blob));
+    var uri = PDF.output("datauristring");
+    $("#container iframe").attr("src", uri);
+});
+
