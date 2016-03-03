@@ -3,6 +3,15 @@
 var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSection;
 //( function() {
 
+    var EventQueue = {
+        RenderComplete: [],
+        Initialized: [],
+        ChildrenInitialized: [],
+        PagesCompleted: []
+    }
+
+    var CurrentStatus = "none";
+    
     // A shared static variable
     var PDF = new jsPDF('portrait', 'pt', 'letter');
 
@@ -14,12 +23,17 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         return this;
     }
 
+    function isPDFSection( section ) {
+        return _.isObject( section ) && section.baseClass === PDFSection;
+    };
+
 
     /* PDF Section base constructor:
         A common class between the PDFSection classes and the Textwrapper class
     */
     function PDFBase (settings){
         this.initSettings = settings;
+        this.baseClass  = PDFBase;  // This is overridden for the PDFSection classes, but not the TextWrapper
     }
     (function() {
         this.initialize = function(globalSettings){
@@ -35,14 +49,14 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }
     
             return setProperties.call(this, {
-                overflowAction:           s.overflowAction || gs.overflowAction || "split",
                 ignorePadding:            s.ignorePadding || gs.ignorePadding || false,
                 fixedWidth  :             s.fixedWidth    || null,
                 width       :             this.width      || s.width         || null,
                 Font        :             s.Font          || gs.Font         || 'courier',
                 FontSize    :             s.FontSize      || gs.FontSize     || 10,
                 DrawColor   :             s.DrawColor     || gs.DrawColor    || [0, 0, 0],
-                linePadding : new Offset (s.linePadding   || gs.linePadding  || { all: 0 } )
+                linePadding : new Offset (s.linePadding   || gs.linePadding  || { all: 0 } ),
+                overflowAction : "split", 
             });
         };
         this.getStyles = function(){
@@ -60,17 +74,45 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             return styles;
         };
         this.clone  = function(globalSettings){ 
-            var instance = new this.constructor(this).setContent(this.content);
-            if ( this.constructor === TextWrapper)
-                return instance;
-            if ( this.isPDFSection( this.Header) )
-                instance.setHeader(this.Header);
-            if ( this.isPDFSection( this.Footer) )
-                instance.setFooter(this.Footer);
-            if ( _.isUndefined(this.initSettings) ){
-                instance.initialize(globalSettings || this.inheritedSettings);
+            var img;
+            var content = this.cloneContent();
+            if ( this.constructor === ImageSection && !_.isNull(this.image)  ){
+                img = this.image.clone();
             }
+            var instance = new this.constructor(this);
+            if ( this.constructor === TextWrapper){
+                instance.initialize();
+                instance.setContent(this.content);
+                return instance;
+            }
+            if ( isPDFSection( this.Header) )
+                instance.Header = this.Header.clone();
+            if ( isPDFSection( this.Footer ) )
+                instance.Footer = this.Footer.clone();
+            if ( _.isUndefined( this.initSettings ) ){
+                instance.initSettings = this;
+            }
+            else {
+                instance.initSettings = this.initSettings;
+            }
+            instance.initialize(globalSettings || this.inheritedSettings);
+            if ( img ){
+                instance.image = img;
+            }
+            instance.content = content;
             return instance;
+        };
+        this.cloneContent = function( globalSettings ){
+            var content = [];
+            _.forEach( this.content, function(c, index){
+                if ( _.isString( c ) ){
+                    content[ index ] = "" + c;
+                }
+                else if ( _.isObject(c) && ( isPDFSection( c ) || c.baseClass === PDFBase )){
+                    content[ index ]  = c.clone();
+                }
+            });
+            return content;
         };
         this.setStyles = function(styles){
             _.forEach(_.keys(styles), function(key){
@@ -86,12 +128,168 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }
         };
         this.getWidth = function(){
-            if ( this.constructor === ImageSection ){
-                this.width = this.image.width;
+            if ( this.constructor === ImageSection && !_.isNull(this.image) ){
+                return this.image.width;
             }
-            return this.width;
+            else if ( this.fixedWidth ){
+                return this.fixedWidth;
+            }
+            else if( this.position && this.position.getWidth() > 0 ){
+                return this.position.getWidth();
+            }
+            return this.width || 0;
         };
-        this.baseClass  = PDFBase;  // This is overridden for the PDFSection classes, but not the TextWrapper
+
+        this.printConstructorName = function(){
+            if ( this.constructor === PDFBase ){
+                return "PDFBase";
+            } else if ( this.constructor === PDFSection ){
+                return "PDFSection";
+            } else if ( this.constructor === TextWrapper ){
+                return "TextWrapper";
+            } else if ( this.constructor === TextSection ){
+                return "TextSection";
+            } else if ( this.constructor === RowSection ){
+                return "RowSection";
+            } else if ( this.constructor === ColumnSection ){
+                return "ColumnSection";
+            } else if ( this.constructor === ImageSection ){
+                return "ImageSection";
+            } else if ( this.constructor === TextMap ){
+                return "TextMap";
+            } else if (this.constructor === PDFPage ){
+                return "PDFPage";
+            } else if ( this.constructor === PDFDocument ){
+                return "PDFDocument";
+            } else return "UnknownConstructor";
+        }
+
+        this.printPath = function( parentPath ){
+            parentPath = parentPath || "";
+            var pathString = parentPath + this.printConstructorName();
+            if ( this.constructor === ImageSection ){
+                if ( _.isNull( this.image ) )
+                    return pathString + " -> Image(NULL)\n";
+                else if ( _.isUndefined(this.image))
+                    return pathString + " -> Image(UNDEFINED)\n";
+                else if ( this.image.image.src ){
+                    return pathString + " -> Image(" + this.image.image.src + ")\n";
+                }
+            }
+            var size = pathString.length;
+            var padding = '\n' +  Array(size).join(' ');
+            var paths = [];
+            var elements = this.content;
+            if ( this.constructor === PDFDocument ){
+                elements = this.pages;
+            }
+            _.forEach( elements, function(el, index){
+                var thispadding = padding;
+                if ( index == 0 ){
+                    thispadding = "";
+                }
+                var childPath = "";
+                if ( _.isString(el) )
+                    childPath = thispadding + " -> String( " + el + ") \n";
+                else if ( _.isUndefined(el))
+                    childPath = thispadding + " -> Undefined\n";
+                else if ( _.isNull(el) )
+                    childPath = thispadding + " -> NULL\n";
+                else if ( isPDFSection(el) || el.constructor === TextWrapper )
+                    childPath = el.printPath( thispadding + " -> ");
+                else 
+                    childPath = pathString + typeof el + "(" + el  + "\n";
+                paths.push(childPath);
+            }.bind(this) );
+            if ( paths.length == 0 ){
+                return pathString + " -> [] \n";
+            }
+            else 
+                return pathString + _.reduce( paths, function(str, el){
+                    str += el;
+                    return str;
+                }, "" );
+        }
+
+
+        this.printHeight = function( parentPath ){
+            parentPath = parentPath || "";
+            var sum = 0;
+            var max = 0;
+            var pathString = parentPath + this.printConstructorName();
+            if ( this.constructor === ImageSection ){
+                if ( _.isNull( this.image ) )
+                    return pathString + " -> Image(0)\n";
+                else if ( _.isUndefined(this.image))
+                    return pathString + " -> Image(0)n";
+                else if ( this.image.image.src ){
+                    return pathString + " -> Image(" + this.image.height + ")\n";
+                }
+            }
+            var size = pathString.length;
+            if( this.constructor !== PDFDocument ) size += ( ( "" + this.getHeight() ).length * 2 )+ 4;
+            var padding = '\n' +  Array(size).join(' ');
+            var paths = [];
+            paths.push( "||| Padding(" + this.padding.verticalSum() + ")+Margin("+this.margin.verticalSum() + 
+                ")+Position("+(this.position || {}).y1 + ")\n");
+            
+            if ( this.Header ){
+                paths.push(this.Header.printPath(pashString+"::HEADER::"));
+            }
+            if ( this.Footer ){
+                paths.push(this.Footer.printPath(pashString+"::FOOTER::"));
+            }
+
+            
+            var elements = this.content;
+            if ( this.constructor === PDFDocument ){
+                elements = this.pages;
+            }
+            _.forEach( elements, function(el, index){
+                var thispadding = padding;
+                var childPath = "";
+                if ( _.isUndefined(el))
+                    childPath = thispadding + " -> Undefined(0)\n";
+                else if ( _.isNull(el) )
+                    childPath = thispadding + " -> NULL(0)\n";
+                else if ( el.constructor === TextWrapper )
+                    childPath = thispadding + " -> " +  el.printConstructorName()  + " ( " + el.getHeight() + " ) \n";
+                else if ( isPDFSection(el) )
+                    childPath = el.printHeight( thispadding + " -> ");
+                else 
+                    childPath = pathString + typeof el + "( ?? ) \n";
+                if ( _.isObject(el)){
+                    if( el.position ) max = Math.max(el.getHeight(), max);
+                    else sum += el.getHeight();
+                }
+                paths.push(childPath);
+            }.bind(this) );
+
+            if ( max > sum ){
+                sum = max;
+            }
+            sum += this.padding.verticalSum() + this.margin.verticalSum();
+            if ( this.position ){
+                pathString += "{absPos:" + sum + this.position.y1 + "}"; 
+            }
+            else pathString += "{" + sum + "}";
+            if( this.constructor !== PDFDocument ) pathString += "(" + this.getHeight() + ")";
+
+            if ( paths.length == 0 ){
+                return pathString + " -> []( 0 ) \n";
+            }
+            else 
+                return pathString + _.reduce( paths, function(str, el){
+                    str += el;
+                    return str;
+                }, "" );
+        }
+
+
+
+
+
+
         this.constructor = PDFBase;
     }).call(PDFBase.prototype);
 
@@ -125,8 +323,12 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                                                    || s.border          || gs.border || false,
                 margin          : new Offset ( this.margin || s.margin  || { all: 0 }),
                 overflowAction  : s.overflowAction || gs.overflowAction || "split",
-                padding         : new Offset ( this.padding || s.padding || { all: 0 })
+                padding         : new Offset ( this.padding || s.padding || { all: 0 }),
+                baseClass   : PDFSection
             });
+            if ( this.constructor === PDFSection ){
+                this.initializeChildren();
+            }
             return this;
         };
         this.initializeChildren = function(){
@@ -142,10 +344,10 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }.bind(this));
         };
         this.getHeaderHeight = function(){
-            return ( this.isPDFSection(this.Header)? this.Header.getHeight() : 0 );
+            return ( isPDFSection(this.Header)? this.Header.getHeight() : 0 );
         };
         this.getFooterHeight = function(){
-            return ( this.isPDFSection(this.Footer)? this.Footer.getHeight() : 0 );
+            return ( isPDFSection(this.Footer)? this.Footer.getHeight() : 0 );
         };
         this.getHeaderFooterHeight = function(){
             return this.getHeaderHeight() + this.getFooterHeight();
@@ -198,10 +400,10 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             console.log(typeof content);
             console.log(this);
             if ( _.isObject( content ) && ( content.baseClass === PDFBase || content.baseClass === PDFSection )){
-                if ( _.isUndefined(this.initSettings) ){
-                    content.initialize(this.inheritedSettings);
+                if ( this.initSettings ){
+                    //content.initialize(this.inheritedSettings || this.);
                 }
-                return content;
+                return content;//.clone();
             }
             else if ( _.isString( content ) ||  _.isNumber(content)){
                 return new TextSection({}, this.inheritedSettings).addContent(""+content);
@@ -229,6 +431,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }
             else { throw "Error, content of type " + typeof content + " was not expected."; }
         };
+
         this.setFooter = function(footer) {
             if ( _.isUndefined(footer) ){
                 return this;
@@ -236,6 +439,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             this.Footer = this.parseContent(footer);
             return this;
         };
+
         this.setHeader = function(header) {
             if ( _.isUndefined(header) ){
                 return this;
@@ -244,15 +448,11 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             return this;
         };
         // Check if an object is a PDFSection
-        this.isPDFSection = function ( section ) {
-            return _.isObject( section ) && section.baseClass === PDFSection;
-        };
     
         this.getHeight = function(){
             var contentHeight = 0;
             var max = 0;
-            // if an image is defined (ImageSection), then start with the image height
-            if ( this.image ){
+            if ( this.constructor === ImageSection && _.isObject(this.image)){
                 contentHeight = this.image.height;
             }
             _.forEach( this.content, function(section) {
@@ -263,14 +463,13 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                     contentHeight += section.getHeight();
                 }
             }.bind(this));
-            // Use the max height fixed position item if it is taller than all other items
             if ( max > contentHeight ){
                 contentHeight = max;
             }
-            // Add the starting position if this element is pos
-            if ( this.position ) {
-                return contentHeight += this.position.y1;
+            if ( this.position ){
+                contentHeight += this.position.y1;
             }
+            
             return this.getHeightWithoutContent() + contentHeight;
         };
     
@@ -287,9 +486,9 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             this.setWidth(availableWidth);
             var offset = this.margin.clone().add( this.padding );
             var maxWidth = availableWidth - offset.horizontalSum();
-            if ( this.isPDFSection(this.Header))
+            if ( isPDFSection(this.Header))
                 this.Header.splitToWidth( this.Header.ignorePadding? availableWidth : maxWidth);
-            if ( this.isPDFSection(this.Footer))
+            if ( isPDFSection(this.Footer))
                 this.Footer.splitToWidth(this.Footer.ignorePadding? availableWidth : maxWidth);
             for ( var i = 0; i < this.content.length; i++){
                 this.content[i].splitToWidth(maxWidth);
@@ -298,8 +497,18 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
 
         this.splitToHeight = function( availableSpace, nextPageSpace ) {
-            console.log("splitting");
-            console.log(this);
+            if ( this.constructor === ImageSection && this.getHeight() > availableSpace.getHeight() ){
+                console.log("availableSpace");
+                console.log(availableSpace.getHeight());
+                console.log("This height");
+                console.log(this.getHeight());
+                if ( this.getHeight() > nextPageSpace.getHeight() ){
+                    throw ("Not enough space for image. ");
+                }
+                else return { status: "newPage", overflow: this };
+            }
+
+
             var orig = availableSpace.clone();
             PDF.setFont(this.Font);
             PDF.setFontSize(this.FontSize);
@@ -376,13 +585,13 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             var styles  = this.getStyles();
             this.renderBorderAndFill(drawDim);    
             this.setStyles( styles );
-            if ( this.isPDFSection( this.Header ) ){
+            if ( isPDFSection( this.Header ) ){
                 var headerSpace = drawDim.clone().setHeight( this.Header.getHeight());
                 this.Header.render( headerSpace );
                 drawDim.offset( { y1: this.Header.getHeight() } );
 
             }
-            if ( this.isPDFSection( this.Footer ) ){
+            if ( isPDFSection( this.Footer ) ){
                 var footerSpace = drawDim.clone().setHeight( this.Footer.getHeight(), true);
                 this.Footer.render( footerSpace );
                 drawDim.offset( { y2: this.Footer.getHeight() } );
@@ -398,7 +607,6 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             }.bind(this));
             return this;
         };
-        this.baseClass   = PDFSection;
         this.constructor = PDFSection;
 
         return this;
@@ -502,12 +710,15 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             this.initializeChildren();
             return this;
         };
-        this.getHeight = function(){
-            var h = PDFSection.prototype.getHeight.call(this);
+        this.getHeight = function( ){
+            var height = this.getHeightWithoutContent();
+            _.forEach ( this.content, function(c) {
+                height += c.getHeight();
+            }.bind(this));
             if ( this.position ){
-                return h + PDF.internal.getLineHeight();
+                height += this.position.y1;
             }
-            else return h;
+            return height;
         };
         this.addContent = function(content){
             this.content = this.content || [];
@@ -587,9 +798,9 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             
             var offset = this.margin.clone().add( this.padding );
 
-            if ( this.isPDFSection(this.Header))
+            if ( isPDFSection(this.Header))
                 this.Header.splitToWidth(availableWidth - (this.Header.ignorePadding? this.padding.horizontalSum() : 0 ));
-            if ( this.isPDFSection(this.Footer))
+            if ( isPDFSection(this.Footer))
                 this.Footer.splitToWidth(availableWidth - (this.Footer.ignorePadding? this.padding.horizontalSum() : 0 ));
 
             var widthLeft = availableWidth - offset.horizontalSum();
@@ -629,7 +840,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                         
                         if ( nestedResult.status === "normal" ){
                             var lastEl = overflow;
-                            while( this.isPDFSection(lastEl) && lastEl.content.length > 0 && this.isPDFSection( _.last(lastEl.content) ) ){
+                            while( isPDFSection(lastEl) && lastEl.content.length > 0 && isPDFSection( _.last(lastEl.content) ) ){
                                 lastEl.content = _.takeRight(lastEl.content, 1);
                                 lastEl = lastEl.content[0];
                             }
@@ -654,12 +865,12 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             drawDim.offset( this.padding );
             this.setStyles( styles );
     
-            if ( this.isPDFSection( this.Header ) ){
+            if ( isPDFSection( this.Header ) ){
                 var headerSpace = drawDim.clone().setHeight( this.Header.getHeight());
                 this.Header.render( headerSpace );
                 drawDim.offset( { y1: this.Header.getHeight() } );
             }
-            if ( this.isPDFSection( this.Footer ) ){
+            if ( isPDFSection( this.Footer ) ){
                 var footerSpace = drawDim.clone().setHeight( this.Footer.getHeight());
                 this.Footer.render( footerSpace );
                 drawDim.offset( { y2: this.Footer.getHeight() } );
@@ -692,15 +903,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         this.constructor = ColumnSection;
     }).call(Object.create(PDFSection.prototype));
 
-    ImageSection = function(settings){
-        if ( _.isString(settings.image) || ( settings.image && settings.image.constructor === ImageData ) ){
-            this.image = _.isString(settings.image)
-                ?  new ImageData(settings.image, settings.width)
-                :  settings.image;
-        }
-        else {
-            this.image = null;
-        }
+    ImageSection = function(settings){     
         PDFSection.call( this, settings );
        return this;
     };
@@ -711,52 +914,34 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             var gs = globalSettings          || {};
             PDFSection.prototype.initialize.call(this, gs);
             setProperties.call(this, {
+                image   : s.image || gs.image || null,
                 position  : new Dimensions(s.position || {x1: 0, y1: 0, width: 0, height: 0}),
-                angle     : s.angle || 0,
-                overflowAction : s.overflowAction || "newPage"
+                angle     : s.angle || 0
             });
             this.initializeChildren();
             return this;
         };
         this.render = function(renderSpace){
-            var origBorder = this.Border;
-            var origFill = this.FillColor;
-            PDFSection.prototype.renderBorderAndFill.call(this, renderSpace.clone());
             var drawSpace = renderSpace.clone();
-            if ( this.position )
+            if ( this.position ){
                 drawSpace.offset(this.padding.add(this.margin));
-            else {
-                if ( this.fixedWidth )
-                    drawSpace.setWidth(this.fixedWidth);
-                if( this.fixedHeight )
-                    drawSpace.setHeight( this.fixedHeight );
             }
 
-            console.log("Image");
-            console.log({ x: drawSpace.x1,
-                y: drawSpace.y1,
-                w: this.position.getWidth(),
-                h: this.position.getHeight()});
             var uri = this.image.getURI();
             var format = uri.substring(12,15)==="png"
                 ? "png"
                 : "jpg";
-            this.position.setWidth(this.image.width);
-            this.position.setHeight(this.image.height);
+
             PDF.addImage(
                 this.image.getURI(), 
                 format, 
                 drawSpace.x1, 
                 drawSpace.y1, 
-                this.position.getWidth(), 
-                this.position.getHeight()
+                this.image.width,
+                this.image.height
             );
-            delete this.FillColor;
-            this.Border = false;
 
             PDFSection.prototype.render.call(this, renderSpace.clone().offset(this.padding.add(this.margin)));
-            this.FillColor = origBorder;
-            this.Border = origFill;
             return this;
         };
 
@@ -770,16 +955,15 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             this.setWidth(availableWidth);
             var offset = this.margin.clone().add( this.padding );
             var maxWidth = availableWidth - offset.horizontalSum();
-            if ( this.isPDFSection(this.Header))
+            if ( isPDFSection(this.Header))
                 this.Header.splitToWidth( this.Header.ignorePadding? availableWidth : maxWidth);
-            if ( this.isPDFSection(this.Footer))
+            if ( isPDFSection(this.Footer))
                 this.Footer.splitToWidth(this.Footer.ignorePadding? availableWidth : maxWidth);
             for ( var i = 0; i < this.content.length; i++){
                 this.content[i].splitToWidth(maxWidth);
             }
             return this;
         };
-
         this.constructor = ImageSection;
         return this;
     }).call(Object.create(PDFSection.prototype));
@@ -792,16 +976,14 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
 
     TextMap.prototype = (function(){
         this.initialize = function(globalSettings){
-            var s  = this.initSettings       || {};
-            var gs = globalSettings          || {};
-            PDFSection.prototype.initialize.call(this, gs);
-            this.overflowAction = s.overflowAction || "newPage";
+            PDFSection.prototype.initialize.call(this, globalSettings);
+            this.Border = true;
             this.initializeChildren();
             return this;
         };
         // Add text at position
         this.add = function(content, x, y, w){
-            if ( _.isArray(x) && x.length ===2){
+            if ( _.isArray(x) && x.length ==2){
                 w = y;
                 y = x[1];
                 x = x[0];
@@ -817,26 +999,28 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
 
         // Add an image at the given position
         this.addImage = function(imageData, x, y, w, h, angle){
-            if ( _.isArray(x) && x.length ===2){
+            if ( _.isArray(x) && x.length ==2){
                 angle = h;
                 h = w;
                 y = x[1];
                 x = x[0];
             }
-            
-            this.addContent(new ImageSection({
+
+            var img = new ImageSection({
                 image: imageData,
-                position: new Dimensions({ x1: x, y1: y, width: w || imageData.width, height: h || imageData.height }), 
+                position: new Dimensions({ x1: x, y1: y, width: w, height: h }), 
                 angle: angle,
                 Border: false
-            }));
+            });
+            img.constructor = ImageSection;
+            
+            this.addContent(img);
             
             return this;
         };
-        this.constructor = TextMap;
-
         return this;
     }).call( Object.create( PDFSection.prototype ));
+    TextMap.prototype.constructor = TextMap;
 
     // Derived Type PDFPage
     function PDFPage( settings ) {
@@ -848,7 +1032,6 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             contentSpace : settings.contentSpace.clone(),
             pageFormat   : settings.pageFormat
         });
-        delete this.initSettings;
         return this;
     }
     PDFPage.prototype = Object.create(PDFSection.prototype);
@@ -856,7 +1039,14 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
 
     // Derived Type PDFDocument
     PDFDocument = function ( settings ) {
-        PDFSection.call( this, settings );        
+        PDFSection.call( this, settings );  
+        $(document).on({
+            "InitializationComplete": this.render.bind(this),
+            "PageSplitComplete": function(){
+                CurrentStatus = "Initialized";
+                $(document).trigger("InitializationComplete");
+            }.bind(this)
+        }); 
         return this;
     };
 
@@ -872,50 +1062,42 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             return this.currentPage;
         };
         this.render = function(){
-            this.rendering = true;
-            var waitForInit = new Promise(function(accept){
-                var notifyInitialized = function(){
-                    if ( this.isInitializing ) 
-                        setTimeout(notifyInitialized.bind(this), 1000);
-                    else 
-                        accept(true);
-                }.bind(this);
-                notifyInitialized();
-            }.bind(this));
-
-            waitForInit.then(function(){
+            if ( CurrentStatus === "Initialized" ){
                 PDF = new jsPDF('portrait', 'pt', 'letter');
                 for ( var i = 0; i < this.pages.length; i++){
                     var page = this.pages[i];
                     page.render(page.documentSpace.clone());
-                    console.log(page);
                     if ( i !== this.pages.length - 1){
                         PDF.addPage();
                     }
-                    console.log("Finished");
                 }
-                console.log("Made it");
-                $(document).trigger("renderComplete");
-            }.bind(this));
+            }
+            else if(CurrentStatus !== "Initializing"){
+                this.initialize();
+            }
+            $(document).trigger("RenderComplete");
             return this;
         };
 
         this.save = function(fileName){
             fileName = fileName || "document.pdf";
+            this.render();
             PDF.save(fileName);
         };
     
         this.uri = function(){
+            this.render();
             return PDF.output("datauristring");
         };
     
         this.newWindow = function(){
+            this.render();
             PDF.output("datauri");
         };
     
     
         this.initialize = function() {
-            this.isInitializing = true;
+            CurrentStatus = "initializing";
             PDFSection.prototype.initialize.call(this);
             var s = this.initSettings || {};
             setProperties.call(this, {
@@ -927,84 +1109,52 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             });
             this.pageSpace = this.documentSpace.clone().offset( this.margin );
             var width = this.pageSpace.clone().offset(this.padding).getWidth();
-            var notifyImagesLoaded = function(el){
-                var ready = true;
-                if ( _.isObject(el) ){
-                    if( el.constructor === ImageSection && _.isObject(el.image) ){
-                        if ( _.isFinite(el.image.width)  && el.image.width > 0 ){
-                            el.width = el.image.width;
-                            el.height = el.image.height;
-                        }
-                        else {
-                            return false;
-                        }
-                    }
-                    if ( el.baseClass === PDFSection ){
-                        console.log("is a PDFSection");
-                        console.log(this);
-                        _.forEach(el.content, function(c){
-                            console.log("Checking: ");
-                            console.log(c);
-                            console.log(!notifyImagesLoaded(c));
-                            if (!notifyImagesLoaded(c))
-                                ready = false;
-                        });
-                    }
-                }
-                return ready;
-            };
+            this.initializeChildren( width );
+            if ( this.Header ){
+                this.Header.splitToWidth(width + (this.Header.ignorePadding? this.padding.horizontalSum() : 0 ));
+            }
 
-            var waitForImages = new Promise(function(accept){
-                var checkImagesLoaded = function(){
-                    if ( notifyImagesLoaded(this) ){
-                        accept( true );
-                    }
-                    else {
-                        setTimeout(checkImagesLoaded, 1000);
-                    }
-                }.bind(this);
-                checkImagesLoaded();
-            }.bind(this));
+            if ( isPDFSection(this.Footer)){
+                this.Footer.splitToWidth(width + (this.Footer.ignorePadding? this.padding.horizontalSum() : 0 ));
+            }
 
-            waitForImages.then( function(){
-                if ( this.Header )
-                    this.Header.splitToWidth(width + (this.Header.ignorePadding? this.padding.horizontalSum() : 0 ));    
-                if ( this.isPDFSection(this.Footer))
-                    this.Footer.splitToWidth(width + (this.Footer.ignorePadding? this.padding.horizontalSum() : 0 ));
-
-                this.contentSpace = this.pageSpace.clone().offset({ top: this.getHeaderHeight(), bottom: this.getFooterHeight() });
-                this.addPage();
-    
-               _.forEach(this.content, function(section){
-                   section.splitToWidth(width);
-                    var page = this.currentPage;
-                    var result = section.splitToHeight(page.contentSpace.clone(), page.pageSpace.clone());
-                    if ( result.status !== "newPage" && result.toAdd.getHeight() > page.contentSpace.getHeight())
-                        throw "Over page bounds";
-                    while ( result.status !== "normal" ) {
-                        if ( result === "split" || result === "forcedSplit"){
-                          page.addContent( result.toAdd );
-                          page.contentSpace.offset( { y1: result.toAdd.getHeight() });
-                        }
-                        // Executes for both "split" and "newPage" results
-                        page = this.addPage();
-                        result = result.overflow.splitToHeight( page.contentSpace, page.pageSpace );
-                    }
-                    if ( result.status === "normal"){
-                        this.currentPage.addContent( result.toAdd );
-                        page.contentSpace.offset( { y1: result.toAdd.getHeight() });
-                    }
-                }.bind(this));
-                if( this.currentPage.content.length > 0)
-                    this.addPage();
-                delete this.isInitializing;
-            }.bind(this));
             
+            
+            this.contentSpace = this.pageSpace.clone().offset({ top: this.getHeaderHeight(), bottom: this.getFooterHeight() });
+            this.addPage();
+            this.SplitToPages(width);
             return this;
         };
-            
+
+        this.SplitToPages = function(width){
+             _.forEach(this.content, function(section){
+                if( section.initSettings ){
+                    throw "Section is not initialized!";
+                }
+                section.splitToWidth(width);
+                var page = this.currentPage;
+                var result = section.splitToHeight(page.contentSpace.clone(), page.pageSpace.clone());
+                if ( result.status !== "newPage" && result.toAdd.getHeight() > page.contentSpace.getHeight())
+                    throw "Over page bounds";
+                while ( result.status !== "normal" ) {
+                    if ( result === "split" || result === "forcedSplit"){
+                        page.addContent( result.toAdd );
+                        page.contentSpace.offset( { y1: result.toAdd.getHeight() });
+                    }
+                    // Executes for both "split" and "newPage" results
+                    page = this.addPage();
+                    result = result.overflow.splitToHeight( page.contentSpace, page.pageSpace );
+                }
+                if ( result.status === "normal"){
+                    this.currentPage.addContent( result.toAdd );
+                    page.contentSpace.offset( { y1: result.toAdd.getHeight() });
+                }
+            }.bind(this));
+            if( this.currentPage.content.length > 0)
+                this.addPage();
+            $(document).trigger("PageSplitComplete");
+        };
         this.constructor = PDFDocument;
-        
         return this;
     }).call( Object.create( PDFSection.prototype ));
 
@@ -1171,10 +1321,10 @@ function Dimensions( _dim, _x2, _y1, _y2 ) {
 }
 
 function ImageData(image, width, height) {
-    this.image     = new Image();
-    this.image.src = image;
-    this.image.onload = function(){
-        this.width  = width  || this.image.naturalWidth;
+    this.width = width;
+    this.height = height;
+    this.setDimensions = function(width, height) {
+        this.width = width  || this.image.naturalWidth;
         if (width && !height){
             var scale = width / this.image.naturalWidth;
             this.height = this.image.naturalHeight * scale;
@@ -1183,35 +1333,37 @@ function ImageData(image, width, height) {
             this.height = height || this.image.naturalHeight;
         }
     }.bind(this);
+    
     this.getURI = function(format, quality){
-        if ( this.URI ){
-            return this.URI;
-        }
         var width   = this.image.naturalWidth;
         var height  = this.image.naturalHeight;
         var canvas  = document.createElement('canvas');
         var context = canvas.getContext('2d');
         if ( format !== "png" && format !== "jpeg")
             format = "png";
-        format = "image/jpeg"; //+ (format || "png");
+        format = "image/jpeg";// + (format || "png");
         canvas.width  = width;
         canvas.height = height;
         context.drawImage(this.image, 0, 0, width, height);
-        this.URI = canvas.toDataURL(format, quality);
-        return this.URI;
-    };
+        return canvas.toDataURL(format, quality);
+    }.bind(this);
+
+    this.clone = function(){
+        var instance = new ImageData(this.image, this.width, this.height);
+        return instance;
+    }.bind(this);
+
+    if ( _.isString( image ) ) {
+        this.image     = new Image();
+        this.image.src = image;
+        this.image.onload = function(){
+            this.setDimensions(width, height);
+        }.bind(this);
+    }
+    else if ( _.isObject(image) && image.constructor === Image ){
+        this.image = image.cloneNode(true);
+        this.setDimensions(width, height);
+    }
+
     return this;
 }
-
-var a = new ImageData("Mushroom2.PNG", 300);
-
-
-
-var doc = new PDFDocument();
-$(document).on("renderComplete", function(){
-    // var blob = PDF.output("blob");
-    // window.open(URL.createObjectURL(blob));
-    var uri = PDF.output("datauristring");
-    $("#container iframe").attr("src", uri);
-});
-
