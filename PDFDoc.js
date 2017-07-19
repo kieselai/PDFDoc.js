@@ -8,25 +8,10 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
     // A shared static variable
     var PDF = new jsPDF('portrait', 'pt', 'letter');
 
-    // Convenience function to set properties in constructor
-    function setProperties ( mappedVals ) {
-        _.forEach ( _.keys( mappedVals ), function ( prop ) {
-            this [ prop ] = mappedVals [ prop ];
-        }.bind(this));
-        return this;
-    }
-
-    function isPDFSection( section ) {
-        if ( _.isObject(section) ){
-            if ( section.baseClass === PDFSection )
-                return true;
-            if ( section.constructor === TextSection || section.constructor === PDFSection || 
-                section.constructor === RowSection || section.constructor === ColumnSection || 
-                section.constructor === ImageSection || section.constructor === PDFPage || 
-                section.constructor === PDFDocument || section.constructor === TextMap )
-                return true;
-        }
-        else return false;
+    var isPDFSection = (section) => {
+        if (_.isObject(section) === false) return false;
+        var constructors = [ TextSection, RowSection, ImageSection, PDFDocument, ColumnSection, PDFPage, TextMap ];
+        return (section.baseClass === PDFSection) || _.some(constructors, con => section.constructor === con);
     };
 
 
@@ -39,139 +24,74 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
     }
     (function() {
         this.initialize = function(globalSettings){
-            if ( _.has( this, "initSettings" ) ){
-                var s  = this.initSettings       || {};
-                var gs = globalSettings || {};
-                this.inheritedSettings = s.inheritedSettings || gs.inheritedSettings || {};
-                if ( s.TextColor || gs.TextColor ){
-                    this.inheritedSettings.TextColor = s.TextColor || gs.TextColor;
-                    this.TextColor = s.TextColor || gs.TextColor;
-                }
-                else this.TextColor = [0, 0, 0];
-                if ( s.FontType || gs.FontType ){
-                    this.inheritedSettings.FontType = s.FontType || gs.FontType;
-                    this.FontType = s.FontType || gs.FontType;
-                }
-                else this.FontType = "normal";
-                if ( s.FontSize || gs.FontSize ){
-                    this.inheritedSettings.FontSize = s.FontSize || gs.FontSize;
-                    this.FontSize = s.FontSize || gs.FontSize;
-                }
-                else this.FontSize = 10;
-
-                if ( s.Font || gs.Font ){
-                    this.inheritedSettings.Font = s.Font || gs.Font;
-                    this.Font = s.Font || gs.Font;
-                }
-                else this.Font = "courier";
-
-                if ( s.DrawColor || gs.DrawColor ){
-                    this.inheritedSettings.DrawColor = s.DrawColor || gs.DrawColor;
-                    this.DrawColor = s.DrawColor || gs.DrawColor;
-                }
-                else this.DrawColor = [0, 0, 0];
-
-                if ( s.TextAlign || gs.TextAlign ){
-                    this.inheritedSettings.TextAlign = s.TextAlign || gs.TextAlign;
-                    this.TextAlign = s.TextAlign || gs.TextAlign;
-                }
-                else this.TextAlign = "left";
-
-                if ( this.position || s.position ){
-                    this.position = new Dimensions( this.position || s.position );
-                }
-        
-                return setProperties.call(this, {
-                    fixedWidth  :             s.fixedWidth    || null,
-                    width       :             this.width      || s.width         || null,
-                    linePadding : new Offset (s.linePadding   || gs.linePadding  || { all: 0 } ),
-                    overflowAction : "split", 
+            if (_.has(this, "initSettings")){
+                var s = _.defaults(this.initSettings || {}, globalSettings || {});
+                var { inheritedSettings={}, TextColor=[0,0,0], FontType="normal", FontSize=10, Font="courier", TextAlign="left" } = s;
+                var { DrawColor=[0,0,0], fixedWidth=null, width=null, linePadding={ all: 0 }, overflowAction="split" } = s;
+                this.inheritedSettings = inheritedSettings;
+                _.forEach({ TextColor, FontType, FontSize, Font, DrawColor, TextAlign }, (val, prop) => {
+                    _.set(this, prop, val);
+                    _.set(this.inheritedSettings, prop, val);
                 });
+                if (this.position || s.position) this.position = new Dimensions(this.position || s.position);
+                return _.assign(this, { fixedWidth, width: this.width || width, linePadding: new Offset(linePadding), overflowAction });
             }
         };
         this.getStyles = function(){
-            var styles = {};
-            _.forEach(["DrawColor", "Font", "FontSize", "FontType",
-                       "LineCap", "LineJoin", "LineWidth", "Properties", "TextColor"], 
-                       function(style){
-                         if( _.has(this, style) ){
-                            styles["set"+style] = this[style];
-                            if( !_.isArray(styles["set"+style])){
-                                styles["set"+style] = [styles["set"+style]];
-                            }
-                         }
-                       }.bind(this));
-            return styles;
+            var styleNames = ["DrawColor", "Font", "FontSize", "FontType", "LineCap", "LineJoin", "LineWidth", "Properties", "TextColor"];
+            return _.reduce(styleNames, (styles, name) => {
+                if (_.has(this, name)) {
+                    var setStyle = `set${name}`;
+                    var style = _.isArray(this[name])? this[name] : [this[name]];
+                    return _.set(styles, setStyle, style);
+                }
+            }, {});
         };
         this.clone  = function(globalSettings){ 
             var img;
             var content = this.cloneContent();
-            if ( this.constructor === ImageSection && ( ( _.isNull(this.image) || _.isUndefined(this.image )) ===false)  ){
+            if (this.constructor === ImageSection && _.isNil(this.image) === false)
                 img = this.image.clone();
-            }
             var instance = new this.constructor(this);
-            if ( this.constructor === TextWrapper){
+            if (this.constructor === TextWrapper){
                 instance.initialize();
                 instance.setContent(this.content);
                 return instance;
             }
-            if ( isPDFSection( this.Header) )
-                instance.Header = this.Header.clone();
-            if ( isPDFSection( this.Footer ) )
-                instance.Footer = this.Footer.clone();
-            if ( _.isUndefined( this.initSettings ) ){
-                instance.initSettings = this;
-            }
-            else {
-                instance.initSettings = this.initSettings;
-            }
+            if (isPDFSection(this.Header)) instance.Header = this.Header.clone();
+            if (isPDFSection(this.Footer)) instance.Footer = this.Footer.clone();
+            instance.initSettings = _.isUndefined(this.initSettings)? this : this.initSettings;
             instance.initialize(globalSettings || this.inheritedSettings);
-            if ( img ){
-                instance.image = img;
-            }
+            if (img) instance.image = img;
             instance.content = content;
             return instance;
         };
-        this.cloneContent = function( globalSettings ){
-            var content = [];
-            _.forEach( this.content, function(c, index){
-                if ( _.isString( c ) ){
-                    content[ index ] = "" + c;
-                }
-                else if ( _.isObject(c) && ( isPDFSection( c ) || c.baseClass === PDFBase )){
-                    content[ index ]  = c.clone();
-                }
+        this.cloneContent = function(globalSettings){
+            return _.map(this.content, c => {
+                if (_.isString(c)) return "" + c;
+                if (_.isObject(c) && (isPDFSection(c) || c.baseClass === PDFBase))
+                    return c.clone();
             });
-            return content;
         };
         this.setStyles = function(styles){
-            _.forEach(_.keys(styles), function(key){
-                PDF[key].apply(PDF, styles[key] );
-            });
+            _.forEach(_.keys(styles), key => PDF[key].apply(PDF, styles[key]));
         };
         this.setWidth = function(width){
-            if ( _.isFinite(width)){
-                this.width = width;
-            }
-            else{
-                throw "ERROR, width must be a number";
-            }
+            if (_.isFinite(width)) this.width = width;
+            else throw "ERROR, width must be a number";
         };
-        this.getWidth = function(){
-            if ( this.constructor === ImageSection && !_.isNull(this.image) ){
+        this.getWidth = funciton(){
+            if (this.constructor === ImageSection && _.isNull(this.image) === false)
                 return this.image.width;
-            }
-            else if ( this.fixedWidth ){
+            else if (this.fixedWidth) 
                 return this.fixedWidth;
-            }
-            else if( this.position && this.position.getWidth() > 0 ){
+            else if (this.position && this.position.getWidth() > 0)
                 return this.position.getWidth();
-            }
             return this.width || 0;
         };
 
         this.printConstructorName = function(){
-            if ( this.constructor === PDFBase ){
+            if (this.constructor === PDFBase){
                 return "PDFBase";
             } else if ( this.constructor === PDFSection ){
                 return "PDFSection";
@@ -197,140 +117,91 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         this.printPath = function( parentPath ){
             parentPath = parentPath || "";
             var pathString = parentPath + this.printConstructorName();
-            if ( this.constructor === ImageSection ){
-                if ( _.isNull( this.image ) )
+            if (this.constructor === ImageSection){
+                if (_.isNull( this.image))
                     return pathString + " -> Image(NULL)\n";
-                else if ( _.isUndefined(this.image))
+                else if (_.isUndefined(this.image))
                     return pathString + " -> Image(UNDEFINED)\n";
-                else if ( _.isUndefined( this.image.image ) )
+                else if (_.isUndefined(this.image.image) )
                     return pathString + " -> Image.image(UNDEFINED)\n";
-                else if ( _.isNull( this.image.image ) )
+                else if (_.isNull(this.image.image))
                     return pathString + " -> Image.image(NULL)\n";
-                else if ( this.image.image.src ){
+                else if (this.image.image.src){
                     return pathString + " -> Image(" + this.image.image.src + ")\n";
                 }
             }
             var size = pathString.length;
             var padding = '\n' +  ' ';
-            var paths = [];
             var elements = this.content;
-            if ( this.constructor === PDFDocument ){
-                elements = this.pages;
-            }
-            _.forEach( elements, function(el, index){
-                var thispadding = padding;
-                if ( index == 0 ){
-                    thispadding = "";
-                }
-                var childPath = "";
-                if ( _.isString(el) )
-                    childPath = thispadding + " -> String( " + el + ") \n";
-                else if ( _.isUndefined(el))
-                    childPath = thispadding + " -> Undefined\n";
-                else if ( _.isNull(el) )
-                    childPath = thispadding + " -> NULL\n";
-                else if ( isPDFSection(el) || el.constructor === TextWrapper )
-                    childPath = el.printPath( thispadding + " -> ");
-                else 
-                    childPath = pathString + typeof el + "(" + el  + "\n";
-                paths.push(childPath);
-            }.bind(this) );
-            if ( paths.length == 0 ){
-                return pathString + " -> [] \n";
-            }
-            else 
-                return pathString + _.reduce( paths, function(str, el){
-                    str += el;
-                    return str;
-                }, "" );
+            if (this.constructor === PDFDocument) elements = this.pages;
+            var paths = _.map(elements, (el, index) => {
+                var thispadding = (index == 0)? "" : padding;
+                if (_.isString(el))    return thispadding + " -> String( " + el + ") \n";
+                if (_.isUndefined(el)) return thispadding + " -> Undefined\n";
+                if (_.isNull(el))      return thispadding + " -> NULL\n";
+                if (isPDFSection(el) || el.constructor === TextWrapper)
+                    return el.printPath( thispadding + " -> ");
+                return pathString + typeof el + "(" + el  + "\n";
+            });
+            if (paths.length === 0) return pathString + " -> [] \n";
+            else return _.reduce(paths, (str, el) => `${str}${el}`, pathString);
         }
-
-
-        this.printHeight = function( parentPath, depth ){
+        this.printHeight = function(parentPath, depth){
             parentPath = parentPath || "";
             var sum = 0;
             var max = 0;
             var pathString = parentPath + this.printConstructorName();
-            if ( this.constructor === ImageSection ){
-                if ( _.isNull( this.image ) )
-                    return pathString + " -> Image(0)\n";
-                else if ( _.isUndefined(this.image))
-                    return pathString + " -> Image(0)n";
-                else if ( this.image.image.src ){
+            if (this.constructor === ImageSection){
+                if (_.isNil(this.image)) return pathString + " -> Image(0)\n";
+                else if (this.image.image.src) 
                     return pathString + " -> Image(" + this.image.height + ")\n";
-                }
             }
             var size = pathString.length;
-            if( this.constructor !== PDFDocument ) size += ( ( "" + this.getHeight() ).length * 2 )+ 4;
-            var padding =  parentPath.replace("->", "  ") + "    ";
-
+            if (this.constructor !== PDFDocument) 
+                size += ((`${this.getHeight()}`).length * 2) + 4;
+            var padding = parentPath.replace("->", "  ") + "    ";
             var paths = [];
+            //paths.push(`||| Padding(${this.padding.verticalSum()})+Margin(${this.margin.verticalSum()})+Position(${this.position || {}).y1})\n`);
             paths.push( "||| Padding(" + this.padding.verticalSum() + ")+Margin("+this.margin.verticalSum() + 
                 ")+Position("+(this.position || {}).y1 + ")\n");
-            
-            if ( this.Header ){
-                paths.push(this.Header.printHeight(padding+"::HEADER::"));
-            }
-            if ( this.Footer ){
-                paths.push(this.Footer.printHeight(padding+"::FOOTER::"));
-            }
-
+            if (this.Header) paths.push(this.Header.printHeight(padding+"::HEADER::"));
+            if (this.Footer) paths.push(this.Footer.printHeight(padding+"::FOOTER::"));
             
             var elements = this.content;
-            if ( this.constructor === PDFDocument ){
-                elements = this.pages;
-            }
-            if ( _.isUndefined(depth ) || depth > 0 ){
-                _.forEach( elements, function(el, index){
+            if (this.constructor === PDFDocument) elements = this.pages;
+            if (_.isUndefined(depth) || depth > 0){
+                _.forEach(elements, (el, index)=>{
                     var childPath = "";
-                    if ( _.isUndefined(el))
-                        childPath = padding + " -> Undefined(0)\n";
-                    else if ( _.isNull(el) )
-                        childPath = padding + " -> NULL(0)\n";
-                    else if ( el.constructor === TextWrapper )
+                    if (_.isUndefined(el)) childPath = padding + " -> Undefined(0)\n";
+                    else if (_.isNull(el)) childPath = padding + " -> NULL(0)\n";
+                    else if (el.constructor === TextWrapper) 
                         childPath = padding + " -> " +  el.printConstructorName()  + " ( " + el.getHeight() + " ) \n";
-                    else if ( isPDFSection(el) )
-                        childPath = el.printHeight( padding + " -> ", (_.isFinite(depth)? depth - 1 : depth ));
-                    else 
-                        childPath = pathString + typeof el + "( ?? ) \n";
-                    if ( _.isObject(el)){
-                        if( el.position ) max = Math.max(el.getHeight(), max);
+                    else if (isPDFSection(el)) childPath = el.printHeight( padding + " -> ", (_.isFinite(depth)? depth - 1 : depth ));
+                    else childPath = pathString + typeof el + "( ?? ) \n";
+                    if (_.isObject(el)){
+                        if (el.position) max = Math.max(el.getHeight(), max);
                         else sum += el.getHeight();
                     }
                     paths.push(childPath);
-                }.bind(this) );
+                });
             }
 
-            if ( max > sum ){
-                sum = max;
-            }
+            if (max > sum) sum = max;
             sum += this.padding.verticalSum() + this.margin.verticalSum() + this.getHeaderFooterHeight();
-
-            if ( this.position ){
-                pathString += "{absPos:" + sum + this.position.y1 + "}"; 
-            }
+            if (this.position) pathString += "{absPos:" + sum + this.position.y1 + "}"; 
             else pathString += "{" + sum + "}";
-            if( this.constructor !== PDFDocument ) pathString += "(" + this.getHeight() + ")";
-
-            if ( paths.length == 0 ){
-                return pathString + " -> []( 0 ) \n";
-            }
-            else return "\n" + pathString + _.reduce( paths, function(str, el){
-                str += el;
-                return str;
-            }, "" );
+            if (this.constructor !== PDFDocument) pathString += "(" + this.getHeight() + ")";
+            if (paths.length === 0) return pathString + " -> []( 0 ) \n";
+            else return "\n" + pathString + _.reduce(paths, (str, el) => `${str}${el}`, "");
         }
         this.constructor = PDFBase;
     }).call(PDFBase.prototype);
 
-
     // PDFSection base constructor
-    PDFSection = function ( settings ) {
+    PDFSection = function (settings) {
         settings = settings || {};
         PDFBase.call(this, settings);
-        if (settings.content ){
-            this.addContent(settings.content);
-        }
+        if (settings.content) this.addContent(settings.content);
     };
 
     PDFSection.prototype = (function() {
@@ -338,16 +209,11 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             var s  = this.initSettings       || {};
             var gs = globalSettings          || {};
             PDFBase.prototype.initialize.call(this, globalSettings);
-            if ( s.Header || s.header )
-                this.setHeader( s.Header, this.inheritedSettings);
-            if ( s.Footer || s.footer )
-                this.setFooter(s.Footer, this.inheritedSettings);
-    
+            if (s.Header || s.header) this.setHeader(s.Header, this.inheritedSettings);
+            if (s.Footer || s.footer) this.setFooter(s.Footer, this.inheritedSettings);
             this.content = this.content || s.content || [];
-            if ( s.FillColor || gs.FillColor ){
-                this.FillColor = s.FillColor || gs.FillColor;
-            }
-            setProperties.call(this, {
+            if (s.FillColor || gs.FillColor) this.FillColor = s.FillColor || gs.FillColor;
+            _.assign(this, {
                 position        : this.position    || s.positions       || null,
                 Border          : this.Border      || s.Border          || gs.Border  
                                                    || s.border          || gs.border || false,
@@ -356,55 +222,41 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                 padding         : new Offset ( this.padding || s.padding || { all: 0 }),
                 baseClass   : PDFSection
             });
-            if ( this.constructor === PDFSection ){
-                this.initializeChildren();
-            }
+            if (this.constructor === PDFSection) this.initializeChildren();
             return this;
         };
         this.initializeChildren = function(){
             delete this.initSettings;
-            if ( this.Header ){
-                this.Header.initialize(this.inheritedSettings);
-            }
-            if ( this.Footer ){
-                this.Footer.initialize( this.inheritedSettings );
-            }
-            _.forEach(this.content, function(c){
-                c.initialize(this.inheritedSettings);
-            }.bind(this));
+            if (this.Header) this.Header.initialize(this.inheritedSettings);
+            if (this.Footer) this.Footer.initialize(this.inheritedSettings);
+            _.forEach(this.content, c => c.initialize(this.inheritedSettings));
         };
         this.getHeaderHeight = function(){
-            return ( isPDFSection(this.Header)? this.Header.getHeight() : 0 );
+            return (isPDFSection(this.Header)? this.Header.getHeight() : 0);
         };
         this.getFooterHeight = function(){
-            return ( isPDFSection(this.Footer)? this.Footer.getHeight() : 0 );
+            return (isPDFSection(this.Footer)? this.Footer.getHeight() : 0);
         };
         this.getHeaderFooterHeight = function(){
             return this.getHeaderHeight() + this.getFooterHeight();
         };
         this.getHeightWithoutContent = function(){
-            var offset = this.margin.clone().add( this.padding );
+            var offset = this.margin.clone().add(this.padding);
             return this.getHeaderFooterHeight() + offset.verticalSum();
         };
         this.getBorderStyles = function(){
             var styles = {};
             if( _.has(this), "Border"){
-                _.forEach(["DrawColor", "LineCap", "LineJoin", "LineWidth"], function(style){
-                    if( _.has(this, "Border"+style) ){
-                        styles["set"+style] = this["Border"+style];
-                        if( _.isArray(styles["set"+style]) === false ){
-                            styles["set"+style] = [styles["set"+style]];
-                        }
+                _.forEach(["DrawColor", "LineCap", "LineJoin", "LineWidth"], (style) => {
+                    if (_.has(this, "Border"+style)) {
+                        var s = this["Border"+style];
+                        _.set(styles, "set"+style, _.isArray(s)? s : [s]);
                     }
-                }.bind(this));
+                });
             }
-            if( _.has(this, "FillColor")){
-                styles.setFillColor = this.FillColor;
-            }
+            if (_.has(this, "FillColor")) styles.setFillColor = this.FillColor;
             return styles;
-        };
-
-        
+        };        
 
         // Wipe content and add to a PDFSection
         this.setContent =  function ( content ){
@@ -417,30 +269,24 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             var result;
             try { result = this.parseContent(content); }
             catch(e) { console.error(e); result = []; }
-            if ( _.isArray(result))
-                _.forEach(result, function(c){  
-                    this.content.push(c); 
-                }.bind(this));
-            else {
-                this.content.push(result);
-            }
+            if (_.isArray(result))
+                _.forEach(result, c => this.content.push(c));
+            else this.content.push(result);
             return this;
         };
         this.parseContent = function(content){
-            if ( _.isObject( content ) && ( content.baseClass === PDFBase || content.baseClass === PDFSection )){
-                if ( _.has( this, "initSettings" ) ){
+            if (_.isObject(content) && (content.baseClass === PDFBase || content.baseClass === PDFSection)){
+                if (_.has(this, "initSettings")){
                     //content.initialize(this.inheritedSettings || this.);
                 }
                 return content;//.clone();
             }
-            else if ( _.isString( content ) ||  _.isFinite(content)){
+            else if ( _.isString(content) ||  _.isFinite(content)){
                 return new TextSection({}, this.inheritedSettings).addContent(""+content);
             }
-            else if ( _.isObject ( content ) && (_.has(content, "type") || _.has(content, "image"))) {
-                if ( _.has(content, "image") ){
-                    content.type = "image";
-                }
-                switch ( content.type )  {
+            else if (_.isObject (content) && (_.has(content, "type") || _.has(content, "image"))) {
+                if (_.has(content, "image")) content.type = "image";
+                switch (content.type) {
                     case 'text'     : return new TextSection  (content);
                     case 'row'      : return new RowSection   (content);
                     case 'column'   : // Falls through
@@ -448,30 +294,23 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                     case 'image'    : return new ImageSection (content);
                 }
             }
-            else if ( _.isArray ( content ) ){
-               return _.reduce( content, function(aggr, el){
-                    try {
-                        var result = this.parseContent(el);
-                        return aggr.concat(result);
-                    }
+            else if (_.isArray(content)){
+               return _.flatMap(content, el=> {
+                    try { return this.parseContent(el); }
                     catch(e) { console.error(e); console.log(content); return aggr; }
-               }.bind(this), []);
+               });
             }
             else { throw "Error, content of type " + typeof content + " was not expected."; }
         };
 
         this.setFooter = function(footer) {
-            if ( _.isUndefined(footer) ){
-                return this;
-            }
+            if (_.isUndefined(footer)) return this;
             this.Footer = this.parseContent(footer);
             return this;
         };
 
         this.setHeader = function(header) {
-            if ( _.isUndefined(header) ){
-                return this;
-            }
+            if (_.isUndefined(header)) return this;
             this.Header = this.parseContent(header);
             return this;
         };
@@ -480,85 +319,64 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         this.getHeight = function(){
             var contentHeight = 0;
             var max = 0;
-            if ( this.constructor === ImageSection && _.isObject(this.image)){
+            if (this.constructor === ImageSection && _.isObject(this.image))
                 contentHeight = this.image.height;
-            }
-            _.forEach( this.content, function(section) {
-                if ( section.position ){
-                    max = Math.max(section.getHeight(), max);
-                }
-                else {
-                    contentHeight += section.getHeight();
-                }
-            }.bind(this));
-            if ( max > contentHeight ){
-                contentHeight = max;
-            }
-            if ( this.position ){
-                contentHeight += this.position.y1;
-            }
-            
+            _.forEach(this.content, section => {
+                if (section.position) max = Math.max(section.getHeight(), max);
+                else contentHeight += section.getHeight();
+            });
+            if (max > contentHeight) contentHeight = max;
+            if (this.position) contentHeight += this.position.y1;
             return this.getHeightWithoutContent() + contentHeight;
         };
         
-        this.splitContentToWidth = function( availableWidth ){
-
+        this.splitContentToWidth = function(availableWidth){}
+        this.calcOwnWidth = function(availableWidth){
+            if (_.isFinite(availableWidth) !== true)  throw "No width given in calcOwnWidth()";
+            return Math.min((this.fixedWidth || availableWidth), availableWidth);
         }
-
-        this.calcOwnWidth = function( availableWidth ){
-            if ( _.isFinite( availableWidth ) !== true )  throw "No width given in calcOwnWidth()";
-            return Math.min( ( this.fixedWidth || availableWidth ), availableWidth );
-        }
-
-        this.splitToWidth = function( availableWidth ){
-            if ( _.has( this, "initSettings" ) )  throw "Section Not Initilized!";
-            availableWidth = this.calcOwnWidth( availableWidth );
-            this.setWidth( availableWidth );
+        this.splitToWidth = function(availableWidth){
+            if (_.has(this, "initSettings")) throw "Section Not Initilized!";
+            availableWidth = this.calcOwnWidth(availableWidth);
+            this.setWidth(availableWidth);
             availableWidth -= this.margin.horizontalSum();
-            if ( isPDFSection(this.Header)) this.Header.splitToWidth( availableWidth );
-            if ( isPDFSection(this.Footer)) this.Footer.splitToWidth( availableWidth );
+            if (isPDFSection(this.Header)) this.Header.splitToWidth( availableWidth );
+            if (isPDFSection(this.Footer)) this.Footer.splitToWidth( availableWidth );
             availableWidth -= this.padding.horizontalSum();
             this.splitContentToWidth( availableWidth );
             return this;
         };
 
         this.splitContentToWidth = function( availableWidth ){
-            for ( var i = 0; i < this.content.length; i++){
-                this.content[i].splitToWidth( availableWidth );
-            }
+            _.forEach(this.content, el => el.splitToWidth(availableWidth));
         };
 
-        this.splitToHeight = function( availableSpace, nextPageSpace ) {
-            if ( this.constructor === ImageSection && this.getHeight() > availableSpace.getHeight() ){
-                if ( this.getHeight() > nextPageSpace.getHeight() ){
-                    throw ("Not enough space for image. ");
-                }
+        this.splitToHeight = function(availableSpace, nextPageSpace) {
+            if (this.constructor === ImageSection && this.getHeight() > availableSpace.getHeight()){
+                if (this.getHeight() > nextPageSpace.getHeight()) throw ("Not enough space for image. ");
                 else return { status: "newPage", overflow: this };
             }
-
-
             var orig = availableSpace.clone();
             PDF.setFont(this.Font);
             PDF.setFontSize(this.FontSize);
             
             var baseHeight = this.getHeightWithoutContent();
-            if ( this.getHeight() > availableSpace.getHeight() ) {
-                if ( baseHeight > availableSpace.getHeight() || 
+            if (this.getHeight() > availableSpace.getHeight()) {
+                if (baseHeight > availableSpace.getHeight() || 
                     (baseHeight + ( PDF.internal.getLineHeight() * 3) > availableSpace.getHeight())) {
                     this.splitResult = "noSpace";
                     return { status: "noSpace", overflow: this };
                 }
                 var search = this;
-                while( search.content && search.content.length < 2){
-                    if( search.content.length === 0 || _.isString(search.content[0])){
+                while (search.content && search.content.length < 2){
+                    if (search.content.length === 0 || _.isString(search.content[0])) {
                         this.splitResult = "noSpace";
                         return { status: "noSpace", overflow: this };
                     }
-                    else if( search.content.length === 1 ){
+                    else if (search.content.length === 1)
                         search = search.content[0];
-                    }
                 }
-                if ( this.overflowAction === "split" || Math.abs(nextPageSpace.getHeight() - availableSpace.getHeight()) < 0.5){
+                if (this.overflowAction === "split" || Math.abs(nextPageSpace.getHeight() - availableSpace.getHeight()) < 0.5){
                     var result = { status: (this.overflowAction === "split" ? "split" : "forcedSplit" ) };
                     var usedHeight = this.getHeightWithoutContent();
                     nextPageSpace.offset( { y1: this.getHeightWithoutContent()});
@@ -567,16 +385,14 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                     var heights = [];
                     var sums = [];
                     var sum = 0;
-
                     while ( this.content[i].getHeight() + usedHeight < availableSpace.getHeight()){
                         availableSpace.offset( { y1: this.content[ i ].getHeight()});
                         heights[i] = this.content[i].getHeight();
                         sum += heights[i];
                         sums[i] = sum;
-
                         ++i;
                     }
-                    if ( i === 0 ){                         
+                    if (i === 0){                         
                         this.splitResult = "noSpace";
                         return { status: "noSpace", overflow: this };
                     }
@@ -597,17 +413,13 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
 
 
                     var nestedResult = this.content[i].splitToHeight(availableSpace.clone(), nextPageSpace.clone());
-    
                     result.toAdd = this.clone()
                           .setContent( _.take(this.content, i))
                           .addContent( nestedResult.toAdd );
-    
                     result.overflow = this.clone()
                           .setContent( nestedResult.overflow )
                           .addContent( _.drop(this.content, i + 1));
-                    if ( result.toAdd.getHeight() > orig.getHeight()){
-                        throw "Something went wrong in height calculation";
-                    }
+                    if (result.toAdd.getHeight() > orig.getHeight()) throw "Something went wrong in height calculation";
                     return result;
                 }
                 else {
@@ -618,7 +430,6 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             else {
                 this.splitResult = "normal";
                 return { status: "normal", toAdd: this };
-
             }
         };
     
@@ -627,88 +438,69 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             var hasFill   = _.has(this, "FillColor");
             var hasBorder = _.has(this, "Border") && this.Border === true;
             var borderStyles = this.getBorderStyles();
-            if ( hasFill || hasBorder ){
+            if (hasFill || hasBorder){
                 this.setStyles( borderStyles );
                 var x1 = drawDim.x1, 
                     y1 = drawDim.y1, 
                     width = drawDim.getWidth(), 
                     height = drawDim.getHeight();
-                if ( hasFill && hasBorder )
-                    PDF.rect( x1, y1, width, height, "FD");
-                else if ( hasFill )
-                    PDF.rect( x1, y1, width, height, "F");
-                else  // hasBorder
-                    PDF.rect( x1, y1, width, height );
+                if (hasFill && hasBorder) PDF.rect(x1, y1, width, height, "FD");
+                else if (hasFill) PDF.rect(x1, y1, width, height, "F");
+                else PDF.rect(x1, y1, width, height); // hasBorder
             }
             return this;
         };
     
         this.render = function(renderSpace){ 
-            var drawDim = _.isUndefined(this.position) || _.isNull(this.position)
+            var drawDim = _.isNil(this.position) 
                     ? renderSpace.clone()
                     : renderSpace.clone().translate(this.position.x1, this.position.y1);
-            drawDim.setHeight( this.getHeight() );
-            drawDim.setWidth( this.getWidth() );
+            drawDim.setHeight(this.getHeight());
+            drawDim.setWidth(this.getWidth());
             drawDim.offset(this.margin);
-
             var styles  = this.getStyles();
             this.renderBorderAndFill(drawDim);    
-            this.setStyles( styles );
-            if ( isPDFSection( this.Header ) ){
+            this.setStyles(styles);
+            if (isPDFSection(this.Header)){
                 this.Header.render( drawDim.clone() );
-                drawDim.offset( { y1: this.Header.getHeight() } );
+                drawDim.offset({ y1: this.Header.getHeight() });
             }
-            if ( isPDFSection( this.Footer ) ){
+            if (isPDFSection(this.Footer)){
                 var footerSpace = drawDim.clone().setHeight( this.Footer.getHeight(), true);
                 this.Footer.render( footerSpace );
                 drawDim.offset( { y2: this.Footer.getHeight() } );
             }
             drawDim.offset( this.padding );
             var contentSpace = drawDim.clone();
-            _.forEach(this.content, function(section){
-                var sectionSpace = _.isUndefined(section.position) || _.isNull(section.position)
-                    ? drawDim.clone()
-                    : contentSpace.clone();
+            _.forEach(this.content, (section) => {
+                var sectionSpace = _.isNil(section.position) ? drawDim.clone() : contentSpace.clone();
                 section.render( sectionSpace );
-
                 drawDim.offset( { y1: section.getHeight() });
-            }.bind(this));
+            });
             this.baseClass = PDFSection;
-
             return this;
         };
-
-
-
         this.constructor = PDFSection;
-
         return this;
-    }).call( Object.create( PDFBase.prototype ) );
-
+    }).call(Object.create(PDFBase.prototype));
 
     // Wraps text for TextSection class ( this was to make the TextSection class more similar to the other PDFSection classes )
-    function TextWrapper(settings ){
+    function TextWrapper(settings){
         settings = settings || {};
         this.content = [];
-        if ( settings.content ){
-            this.setContent(settings.content);
-        }
+        if (settings.content) this.setContent(settings.content);
         PDFBase.call(this, settings);
     }
-
-    
     TextWrapper.prototype = (function() {
         this.initialize = function(globalSettings){
-            if ( _.has( this, "initSettings" ) ){
+            if (_.has(this, "initSettings")){
                 PDFBase.prototype.initialize.call(this, globalSettings);            
                 delete this.initSettings;
             }
-            
             return this;
         };
-        this.setContent = function(content){
-            this.content = content;
-            return this;
+        this.setContent = function(content){ 
+            return _.set(this, "content", content); 
         };
         this.getHeightWithoutContent = function(){
             var sum = 0;
@@ -734,9 +526,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             PDF.setFont(this.Font);
             PDF.setFontSize(this.FontSize);
             var maxIndex = Math.ceil( availableSpace.getHeight() / PDF.internal.getLineHeight() ) - 1;
-            if ( maxIndex <= this.content.length ) { 
-                return { status: "normal", toAdd: this }; 
-            }
+            if (maxIndex <= this.content.length) return { status: "normal", toAdd: this }; 
             return { 
                 status   : "split",
                 toAdd    : this.clone().setContent( _.take( this.content, maxIndex)),
@@ -749,12 +539,10 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         }
 
         this.getXAlign = function( text, availableWidth, actualWidth ) {
-            if ( actualWidth > availableWidth ){
-                throw "Text does not fit to width of container!";
-            }
-            switch( this.TextAlign ){
-                case "center" : return ( availableWidth - this.getLineWidth(text) ) / 2;
-                case "right"  : return ( availableWidth - this.getLineWidth(text) );
+            if (actualWidth > availableWidth) throw "Text does not fit to width of container!";
+            switch (this.TextAlign){
+                case "center" : return (availableWidth - this.getLineWidth(text)) / 2;
+                case "right"  : return (availableWidth - this.getLineWidth(text));
                 default       : return 0;  // Left align or anything else
             }
         };
@@ -767,9 +555,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             var textStyles = this.getFontStyles();
             this.setStyles( textStyles );
             drawDim.offset({ y1: this.linePadding.top + PDF.internal.getLineHeight()});
-
             var availableWidth = drawDim.getWidth();
-
             // Draw each line and update the drawDim
             if ( _.isArray(this.content))  _.forEach(this.content, this.renderAction.bind(this, drawDim, availableWidth));
             // this.content is either string or an unsupported type, which shouldn't happen.  If a string is received, nothing breaks, but it is unexpected.
@@ -793,88 +579,68 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
 
         this.getFontStyles = function(){
-            var styles = {};
-            _.forEach(["Font", "FontType", "FontSize", "TextColor"], function(style){
-                if( _.has(this, style) ){
-                    styles["set"+style] = this[style];
-                    if( _.isArray(styles["set"+style]) === false ){
-                        styles["set"+style] = [styles["set"+style]];
-                    }
+            return _.reduce(["Font", "FontType", "FontSize", "TextColor"], (styles, style)=>{
+                if (_.has(this, style)){
+                    var s = _.isArray(this[style])? this[style] : [this[style]];
+                    return _.set(styles, "set"+style, s);
                 }
-            }.bind(this));
-            return styles;
+                return styles;
+            });
         };
         this.baseClass = PDFSection;
-
         this.constructor = TextWrapper;
         return this;
-    }).call( Object.create( PDFBase.prototype ) );
-
-
+    }).call(Object.create(PDFBase.prototype));
     
     // Derived PDFSection Type for containing text
-    TextSection = function( settings ) {
-        PDFSection.call( this, settings );
+    TextSection = function(settings) {
+        PDFSection.call(this, settings);
         return this;
     };
 
     TextSection.prototype = (function() {
         this.initialize = function(globalSettings){
-            if ( _.has( this, "initSettings" ) ){
-                 PDFSection.prototype.initialize.call(this, globalSettings);
+            if ( _.has(this, "initSettings")){
+                PDFSection.prototype.initialize.call(this, globalSettings);
                 this.padding = new Offset({ all: 3 });
                 this.initializeChildren();
             }
-           
             return this;
         };
         this.getHeight = function( ){
             var height = this.getHeightWithoutContent();
-            _.forEach ( this.content, function(c) {
-                height += c.getHeight();
-            }.bind(this));
-            if ( this.position ){
-                height += this.position.y1;
-            }
+            _.forEach(this.content, c => { height += c.getHeight(); });
+            if (this.position) height += this.position.y1;
             return height;
         };
         this.addContent = function(content){
             this.content = this.content || [];
-            if ( _.isUndefined(content) || _.isNull(content))
-                content = "";
-            if ( _.isFinite( content )){
-                content = ""+content;
-            }
-            if ( _.isArray( content ) && content.length > 0 ){
+            if (_.isNil(content))    content = "";
+            if (_.isFinite(content)) content = ""+content;
+            if (_.isArray(content) && content.length > 0){
                 var allString = true;
                 var allTextWrap = true;
-                _.forEach( content, function(line){
-                    if ( _.isFinite(line))
-                        line = ""+line;
-                    if ( _.isUndefined(line) || _.isNull(line)){
-                        line = "";
-                    }
-                    allString = ( allString? _.isString( line ) : false );
+                _.forEach(content, line => {
+                    if (_.isFinite(line)) line = ""+line;
+                    if (_.isNil(line)) line = "";
+                    allString = (allString? _.isString(line) : false);
                     allTextWrap = (allTextWrap? _.isObject(line) && line.constructor === TextWrapper : false);
                 });
-                if ( allString || allTextWrap ){
+                if (allString || allTextWrap){
                     content = allString
-                        ? [ new TextWrapper(this.initSettings).setContent(content.join("\n")) ]
+                        ? [new TextWrapper(this.initSettings).setContent(content.join("\n"))]
                         : content;
                 }
             }
-            else if ( _.isString( content ) || _.isFinite(content) || _.isObject(content) && content.constructor === TextWrapper ){
-                content = _.isString( content )
-                    ? [ new TextWrapper(this.initSettings).setContent(""+content) ]
-                    : [ content ];
+            else if (_.isString(content) || _.isFinite(content) || _.isObject(content) && content.constructor === TextWrapper){
+                content = _.isString(content)
+                    ? [new TextWrapper(this.initSettings).setContent(""+content)]
+                    : [content];
             }
                 
-            if ( content.length > 0 ) {
-                if ( _.has( this, "initSettings" ) === false ){
-                    _.forEach( content, function(el){
-                        el.initialize( this.inheritedSettings || {} );
-                    }.bind(this));
-                }
+            if (content.length > 0) {
+                if (_.has(this, "initSettings") === false)
+                    _.forEach(content, el => el.initialize(this.inheritedSettings || {}));
                 this.content = this.content.concat(content);
             }
             return this;
@@ -883,50 +649,43 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         this.baseClass = PDFSection;
 
         return this;
-    }).call( Object.create( PDFSection.prototype ));
+    }).call(Object.create(PDFSection.prototype));
     
-
     // Derived Type RowSection
-    RowSection = function( settings ) {
-        PDFSection.call ( this, settings );
+    RowSection = function(settings) {
+        PDFSection.call(this, settings);
         return this;
     };
 
     RowSection.prototype = (function() {
         this.initialize = function(globalSettings){
-            if ( _.has( this, "initSettings" ) ){
+            if (_.has(this, "initSettings")){
                 PDFSection.prototype.initialize.call(this, globalSettings);
                 this.initializeChildren();
             }
-            
             return this;
         };
         this.getHeight = function( ){
             var height = 0;
-            _.forEach ( this.content, function(col) {
-                height = Math.max( col.getHeight(), height);
-            }.bind(this));
+            _.forEach (this.content, col => { height = Math.max(col.getHeight(), height); });
             return height + this.getHeightWithoutContent();
         };
-
     
-        this.splitContentToWidth = function( availableWidth ){
-            for( var i = 0; i < this.content.length; i++ ) {
+        this.splitContentToWidth = function(availableWidth){
+            _.forEach(this.content, (col, i) => {
                 var col = this.content[i];
-                var thisWidth = availableWidth / ( this.content.length - i );
-                thisWidth = col.fixedWidth
-                    ? Math.min(thisWidth, col.fixedWidth)
-                    : thisWidth;
+                var thisWidth = availableWidth / (this.content.length - i);
+                thisWidth = col.fixedWidth? Math.min(thisWidth, col.fixedWidth) : thisWidth;
                 col.splitToWidth(thisWidth);
                 availableWidth -= thisWidth;
-            }
+            });
             return this;
         };
     
-        this.splitToHeight = function( availableSpace, nextPageSpace ) {
+        this.splitToHeight = function(availableSpace, nextPageSpace) {
             var orig = availableSpace.clone();
-            if ( this.getHeight() > availableSpace.getHeight() ) {
-                if ( this.overflowAction === "split" || Math.abs(nextPageSpace.getHeight() - availableSpace.getHeight()) < 0.5){
+            if (this.getHeight() > availableSpace.getHeight()) {
+                if (this.overflowAction === "split" || Math.abs(nextPageSpace.getHeight() - availableSpace.getHeight()) < 0.5){
                     var result = { 
                         status   : (this.overflowAction === "split" ? "split" : "forcedSplit" ),
                         toAdd    : this.clone().setContent([]),
@@ -936,24 +695,19 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                     nextPageSpace.offset(  { y1: this.getHeightWithoutContent()} );
                     for( var i = 0; i < this.content.length; ++i ){
                         var nestedResult = this.content[i].splitToHeight( availableSpace.clone(), nextPageSpace.clone() );
-                        if ( nestedResult.status === "newPage"){
-                            return { status: "newPage", overflow: this };
-                        }
-    
-                        result.toAdd.addContent( nestedResult.toAdd );
+                        if (nestedResult.status === "newPage") return { status: "newPage", overflow: this };
+                        result.toAdd.addContent(nestedResult.toAdd);
                         var overflow = nestedResult.overflow || nestedResult.toAdd;
-                        
-                        if ( nestedResult.status === "normal" ){
+                        if (nestedResult.status === "normal"){
                             var lastEl = overflow;
-                            while( isPDFSection(lastEl) && lastEl.content.length > 0 && isPDFSection( _.last(lastEl.content) ) ){
+                            while(isPDFSection(lastEl) && lastEl.content.length > 0 && isPDFSection(_.last(lastEl.content))){
                                 lastEl.content = _.takeRight(lastEl.content, 1);
                                 lastEl = lastEl.content[0];
                             }
                         }
                         result.overflow.addContent( overflow ); 
-
                     }
-                    if ( result.toAdd.getHeight() > orig.getHeight())
+                    if (result.toAdd.getHeight() > orig.getHeight())
                         console.error("Error calculating height");
                     return result;
                 }
@@ -963,49 +717,42 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
     
         this.render = function(renderSpace){
-            var drawDim = renderSpace.clone().offset(this.margin),
-                styles  = this.getStyles();
+            var [drawDim, styles] = [renderSpace.clone().offset(this.margin), this.getStyles()];
             this.renderBorderAndFill(drawDim);
-    
             drawDim.offset( this.padding );
-            this.setStyles( styles );
-    
-            if ( isPDFSection( this.Header ) ){
+            this.setStyles(styles);
+            if (isPDFSection(this.Header)){
                 var headerSpace = drawDim.clone().setHeight( this.Header.getHeight());
-                this.Header.render( headerSpace );
+                this.Header.render(headerSpace);
                 drawDim.offset( { y1: this.Header.getHeight() } );
             }
-            if ( isPDFSection( this.Footer ) ){
+            if (isPDFSection(this.Footer)){
                 var footerSpace = drawDim.clone().setHeight( this.Footer.getHeight());
                 this.Footer.render( footerSpace );
                 drawDim.offset( { y2: this.Footer.getHeight() } );
             }
-            _.forEach(this.content, function(section){
+            _.forEach(this.content, (section) => {
                 var sectionSpace = drawDim.clone().setWidth(section.getWidth());
                 section.render( sectionSpace );
                 drawDim.offset( { x1: section.getWidth() });
-            }.bind(this));
+            });
             return this;
         };
         this.constructor = RowSection;
         return this;
-    }).call( Object.create( PDFSection.prototype ));
-    
+    }).call(Object.create(PDFSection.prototype));
 
     // Derived Type ColumnSection
-    ColumnSection = function( settings ) {
-        PDFSection.call( this, settings );
+    ColumnSection = function(settings) {
+        PDFSection.call(this, settings);
         return this;
     };
-    ColumnSection.prototype = 
-    
     ColumnSection.prototype = (function(){
         this.initialize = function(globalSettings){
-            if ( _.has( this, "initSettings" ) ){
+            if (_.has(this, "initSettings")){
                 PDFSection.prototype.initialize.call(this, globalSettings);
                 this.initializeChildren();
             }
-            
             return this;
         };
         this.constructor = ColumnSection;
@@ -1013,24 +760,23 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
     }).call(Object.create(PDFSection.prototype));
 
     ImageSection = function(settings){     
-        PDFSection.call( this, settings );
+        PDFSection.call(this, settings);
        return this;
     };
 
     ImageSection.prototype = (function(){
         this.initialize = function(globalSettings){
-            if ( _.has( this, "initSettings" ) ){
-                var s  = this.initSettings       || {};
-                var gs = globalSettings          || {};
+            if (_.has(this, "initSettings")){
+                var s  = this.initSettings || {};
+                var gs = globalSettings || {};
                 PDFSection.prototype.initialize.call(this, gs);
-                setProperties.call(this, {
+                _.assign(this, {
                     image   : s.image || gs.image || null,
                     position  : new Dimensions(s.position || {x1: 0, y1: 0, width: 0, height: 0}),
                     angle     : s.angle || 0
                 });
                 this.initializeChildren();
             }
-            
             return this;
         };
         this.render = function(renderSpace){
@@ -1038,21 +784,9 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                 ? renderSpace.clone()
                 : renderSpace.clone().translate(this.position.x1, this.position.y1);
             drawSpace.offset(this.padding.add(this.margin));
-
             var uri = this.image.getURI();
-            var format = uri.substring(12,15)==="png"
-                ? "png"
-                : "jpg";
-
-            PDF.addImage(
-                this.image.getURI(), 
-                format, 
-                drawSpace.x1, 
-                drawSpace.y1, 
-                this.image.width,
-                this.image.height
-            );
-
+            var format = uri.substring(12,15)==="png" ? "png" : "jpg";
+            PDF.addImage(this.image.getURI(), format, drawSpace.x1, drawSpace.y1, this.image.width, this.image.height);
             //PDFSection.prototype.render.call(this, renderSpace.clone().offset(this.padding.add(this.margin)));
             return this;
         };
@@ -1061,14 +795,14 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
     }).call(Object.create(PDFSection.prototype));
 
     //TextMap, for conveniently placing text over a(n) background image(s) or nothing at all
-    function TextMap( settings ){
-        PDFSection.call( this, settings );
+    function TextMap(settings){
+        PDFSection.call(this, settings);
         return this;
     }
 
     TextMap.prototype = (function(){
         this.initialize = function(globalSettings){
-             if ( _.has( this, "initSettings" ) ){
+             if (_.has(this, "initSettings")){
                 PDFSection.prototype.initialize.call(this, globalSettings);
                 this.initializeChildren();
             }
@@ -1076,12 +810,10 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
         // Add text at position
         this.add = function(content, x, y, w){
-            if ( _.isArray(x) && x.length ==2){
-                w = y;
-                y = x[1];
-                x = x[0];
+            if (_.isArray(x) && x.length === 2){
+                [w, y, x] = [y, x[1], x[0]];
             }
-            this.addContent({ 
+            this.addContent({
                 type: "text", 
                 content: content, 
                 position: new Dimensions({ x1: x, y1: y, width: w}),
@@ -1092,13 +824,8 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
 
         // Add an image at the given position
         this.addImage = function(imageData, x, y, w, h, angle){
-            if ( _.isArray(x) && x.length ==2){
-                angle = h;
-                h = w;
-                y = x[1];
-                x = x[0];
-            }
-
+            if ( _.isArray(x) && x.length === 2) 
+                [angle, h, y, x] = [h, w, x[1], x[0]];
             var img = new ImageSection({
                 image: imageData,
                 position: new Dimensions({ x1: x, y1: y, width: w, height: h }), 
@@ -1106,20 +833,18 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                 Border: false
             });
             img.constructor = ImageSection;
-            
             this.addContent(img);
-            
             return this;
         };
         return this;
-    }).call( Object.create( PDFSection.prototype ));
+    }).call(Object.create(PDFSection.prototype));
     TextMap.prototype.constructor = TextMap;
 
     // Derived Type PDFPage
-    function PDFPage( settings ) {
-        PDFSection.call( this, settings );
+    function PDFPage(settings) {
+        PDFSection.call(this, settings);
         this.initialize(this);
-        setProperties.call(this, {
+        _.assign(this, {
             documentSpace: settings.documentSpace.clone(),
             pageSpace    : settings.pageSpace.clone(),
             contentSpace : settings.contentSpace.clone(),
@@ -1140,24 +865,19 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         $(document).off("InitializationComplete");
         $(document).off("PageSplitComplete");
         $(document).off("Initialized");
-
-
-
         $(document).on({
             "InitializationComplete": this.render.bind(this),
-            "PageSplitComplete": function(){
+            "PageSplitComplete": ()=>{
                 CurrentStatus = "Initialized";
                 $(document).trigger("InitializationComplete");
-            }.bind(this)
+            }
         }); 
         return this;
     };
-
     PDFDocument.prototype = (function() {
         this.addPage = function(){
-            if ( this.currentPage !== null ){
+            if (this.currentPage !== null)
                 this.pages.push( this.currentPage.clone().setHeader(this.Header).setFooter(this.Footer) );
-            }
             this.currentPage = new PDFPage(this)
             .setHeader(this.Header)
             .setFooter(this.Footer)
@@ -1165,50 +885,36 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             return this.currentPage;
         };
         this.render = function(){
-            if ( CurrentStatus === "Initialized" ){
+            if (CurrentStatus === "Initialized"){
                 PDF = new jsPDF('portrait', 'pt', 'letter');
                 var renderOne = function( page, index ){
                     page.render(page.documentSpace.clone());
-                    if ( (index + 1) < this.pages.length ){
+                    if ((index + 1) < this.pages.length){
                         PDF.addPage();
                         setTimeout( renderOne.bind( this, this.pages[index + 1], index + 1 ));
                     }
-                    else {
-                        $(document).trigger("RenderComplete");
-                    }
+                    else $(document).trigger("RenderComplete");
                 }
-
-                if ( this.pages.length > 0 ){
-                    renderOne.call( this, this.pages[0], 0 );
-                }
-                
+                if (this.pages.length > 0) renderOne.call(this, this.pages[0], 0);
             }
-            else if(CurrentStatus !== "Initializing"){
-                this.initialize();
-            }
-            
+            else if(CurrentStatus !== "Initializing") this.initialize();
             return this;
         };
-
         this.save = function(fileName){
             fileName = fileName || "document.pdf";
             PDF.save(fileName);
         };
-    
         this.uri = function(){
             return PDF.output("datauristring");
         };
-    
         this.newWindow = function(){
             PDF.output("datauri");
-        };
-    
-    
+        };    
         this.initialize = function() {
             CurrentStatus = "initializing";
             PDFSection.prototype.initialize.call(this);
             var s = this.initSettings || {};
-            setProperties.call(this, {
+            _.assign(this, {
                 currentPage   : null,
                 pages         : [],
                 documentSpace : new Dimensions( s.documentSpace || { width : 612, height : 792 }),
@@ -1218,9 +924,8 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             this.pageSpace = this.documentSpace.clone().offset( this.margin );
             var width = this.pageSpace.getWidth() - this.padding.horizontalSum();
             this.initializeChildren( width );
-            if ( this.Header ) this.Header.splitToWidth( this.pageSpace.getWidth() );
-            if ( this.Footer ) this.Footer.splitToWidth( this.pageSpace.getWidth() );
-
+            if (this.Header) this.Header.splitToWidth(this.pageSpace.getWidth());
+            if (this.Footer) this.Footer.splitToWidth(this.pageSpace.getWidth());
             this.contentSpace = this.pageSpace.clone().offset({ top: this.getHeaderHeight(), bottom: this.getFooterHeight() });
             this.addPage();
             this.SplitToPages( width );
@@ -1228,59 +933,45 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
 
         this.SplitToPages = function(width){
-
-            var splitOne = function( section, index ){
-                if( section.initSettings ){
-                    throw "Section is not initialized!";
-                }
+            var splitOne = (section, index) => {
+                if (section.initSettings) throw "Section is not initialized!";
                 section.splitToWidth(width);
                 var page = this.currentPage;
                 var result = section.splitToHeight(page.contentSpace.clone(), page.pageSpace.clone());
-                if ( result.status !== "newPage" && result.toAdd && result.toAdd.getHeight() > page.contentSpace.getHeight())
+                if (result.status !== "newPage" && result.toAdd && result.toAdd.getHeight() > page.contentSpace.getHeight())
                     throw "Over page bounds";
-                while ( result.status !== "normal" ) {
-                    if ( result.status === "split" || result.status === "forcedSplit"){
-                        page.addContent( result.toAdd );
-                        page.contentSpace.offset( { y1: result.toAdd.getHeight() });
+                while (result.status !== "normal") {
+                    if (result.status === "split" || result.status === "forcedSplit"){
+                        page.addContent(result.toAdd);
+                        page.contentSpace.offset({ y1: result.toAdd.getHeight() });
                     }
-                    if ( result === "noSpace") {
-                        throw "No Space on current page!";
-                    }
-
+                    if (result === "noSpace") throw "No Space on current page!";
                     // Executes for both "split" and "newPage" results
                     page = this.addPage();
                     result = result.overflow.splitToHeight( page.contentSpace, page.pageSpace );
                 }
                 if ( result.status === "normal"){
                     this.currentPage.addContent( result.toAdd );
-                    page.contentSpace.offset( { y1: result.toAdd.getHeight() });
+                    page.contentSpace.offset({ y1: result.toAdd.getHeight() });
                 }
-                if ( (index + 1) < this.content.length ){
-                    setTimeout( splitOne.bind(this, this.content[index + 1], index + 1 ));
-                }
+                if ((index + 1) < this.content.length)
+                    setTimeout(splitOne.bind(this, this.content[index + 1], index + 1 ));
                 else if( this.currentPage.content.length > 0){
                     this.addPage();
                     $(document).trigger("PageSplitComplete");
                 }
-            }.bind(this);
-            if ( this.content.length > 0 ){
-                splitOne.call( this, this.content[0], 0 );
-            }
+            };
+            if (this.content.length > 0) splitOne.call( this, this.content[0], 0 );
         };
         this.constructor = PDFDocument;
         return this;
-    }).call( Object.create( PDFSection.prototype ));
-
-
-    
+    }).call(Object.create(PDFSection.prototype));
 //}());
 
-function Offset( _offset, _right, _bottom, _left ) {
-    this.set = function(offset, right, bottom, left){
-        if ( _.isObject( offset ) ) {
-            if ( _.has( offset, "all" ) ){
-                return this.set(offset.all, offset.all, offset.all, offset.all);
-            }
+function Offset(_offset, _right, _bottom, _left) {
+    this.set = (offset, right, bottom, left) => {
+        if (_.isObject(offset)) {
+            if (_.has(offset, "all")) return this.set(offset.all, offset.all, offset.all, offset.all);
             this.top    = offset.top    || this.top     || 0;
             this.right  = offset.right  || this.right   || 0;
             this.bottom = offset.bottom || this.bottom  || 0;
@@ -1293,16 +984,16 @@ function Offset( _offset, _right, _bottom, _left ) {
             this.left   = left   || this.left    || 0;
         }
         return this;
-    }.bind(this);
+    };
 
     this.set(_offset, _right, _bottom, _left);
+    
+    this.clone = () =>{ 
+        return new Offset(this); 
+    };
 
-    this.clone = function(){
-        return new Offset(this);
-    }.bind(this);
-
-    this.add = function( offset, right, bottom, left ) {
-        if ( _.isObject( offset ) ) {
+    this.add = (offset, right, bottom, left) => {
+        if (_.isObject(offset)) {
             this.top    += ( offset.top    || 0 );
             this.right  += ( offset.right  || 0 );
             this.bottom += ( offset.bottom || 0 );
@@ -1315,13 +1006,11 @@ function Offset( _offset, _right, _bottom, _left ) {
             this.left   += ( left   || 0 );
         }
         return this;
-    }.bind(this);
+    };
 
-    this.negate = function(flags, negRight, negbottom, negleft) {
-        if( _.isUndefined(flags) ){
-            flags = { top:true, bottom:true, left:true, right:true };
-        }
-        if ( _.isObject( flags ) ) {
+    this.negate = (flags, negRight, negbottom, negleft) => {
+        if (_.isUndefined(flags)) flags = { top:true, bottom:true, left:true, right:true };
+        if (_.isObject(flags)) {
             this.top    = flags.top    ? (0 - this.top)    : this.top;
             this.right  = flags.right  ? (0 - this.right)  : this.right;
             this.bottom = flags.bottom ? (0 - this.bottom) : this.bottom;
@@ -1336,18 +1025,14 @@ function Offset( _offset, _right, _bottom, _left ) {
         return this;
     };
 
-    this.verticalSum = function(){
-        return this.top + this.bottom;
-    }.bind(this);
-
-    this.horizontalSum = function(){
-        return this.left + this.right;
-    }.bind(this);
+    this.verticalSum   = () => { return this.top + this.bottom; };
+    this.horizontalSum = () => { return this.left + this.right; };
 }
 
-function Coordinate( x0, y0 ){
-    this.x = 0;  this.y = 0;
-   this.add(x0, y0);
+function Coordinate(x0, y0){
+    this.x = 0;
+    this.y = 0;
+    this.add(x0, y0);
 }
 
 Coordinate.prototype = (function(){
