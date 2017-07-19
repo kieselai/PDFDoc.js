@@ -80,7 +80,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             if (_.isFinite(width)) this.width = width;
             else throw "ERROR, width must be a number";
         };
-        this.getWidth = funciton(){
+        this.getWidth = function(){
             if (this.constructor === ImageSection && _.isNull(this.image) === false)
                 return this.image.width;
             else if (this.fixedWidth) 
