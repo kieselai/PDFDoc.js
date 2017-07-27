@@ -74,7 +74,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             });
         };
         this.setStyles = function(styles){
-            _.forEach(_.keys(styles), key => PDF[key].apply(PDF, styles[key]));
+            _.forEach(styles, (style, key) => PDF[key].apply(PDF, style));
         };
         this.setWidth = function(width){
             if (_.isFinite(width)) this.width = width;
@@ -118,15 +118,15 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
             parentPath = parentPath || "";
             var pathString = parentPath + this.printConstructorName();
             if (this.constructor === ImageSection){
-                if (_.isNull( this.image))
+                if (_.isNull( this.image)){
                     return pathString + " -> Image(NULL)\n";
-                else if (_.isUndefined(this.image))
+                } else if (_.isUndefined(this.image)){
                     return pathString + " -> Image(UNDEFINED)\n";
-                else if (_.isUndefined(this.image.image) )
+                } else if (_.isUndefined(this.image.image)){
                     return pathString + " -> Image.image(UNDEFINED)\n";
-                else if (_.isNull(this.image.image))
+                } else if (_.isNull(this.image.image)){
                     return pathString + " -> Image.image(NULL)\n";
-                else if (this.image.image.src){
+                } else if (this.image.image.src){
                     return pathString + " -> Image(" + this.image.image.src + ")\n";
                 }
             }
@@ -148,8 +148,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         }
         this.printHeight = function(parentPath, depth){
             parentPath = parentPath || "";
-            var sum = 0;
-            var max = 0;
+            var [sum, max] = [0, 0];
             var pathString = parentPath + this.printConstructorName();
             if (this.constructor === ImageSection){
                 if (_.isNil(this.image)) return pathString + " -> Image(0)\n";
@@ -205,30 +204,24 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
     };
 
     PDFSection.prototype = (function() {
-        this.initialize = function(globalSettings){
-            var s  = this.initSettings       || {};
-            var gs = globalSettings          || {};
+        this.initialize = function(globalSettings){            
+            var [s={}, gs={}] = [this.initSettings, globalSettings];
             PDFBase.prototype.initialize.call(this, globalSettings);
-            if (s.Header || s.header) this.setHeader(s.Header, this.inheritedSettings);
-            if (s.Footer || s.footer) this.setFooter(s.Footer, this.inheritedSettings);
-            this.content = this.content || s.content || [];
-            if (s.FillColor || gs.FillColor) this.FillColor = s.FillColor || gs.FillColor;
-            _.assign(this, {
-                position        : this.position    || s.positions       || null,
-                Border          : this.Border      || s.Border          || gs.Border  
-                                                   || s.border          || gs.border || false,
-                margin          : new Offset ( this.margin || s.margin  || { all: 0 }),
-                overflowAction  : s.overflowAction || gs.overflowAction || "split",
-                padding         : new Offset ( this.padding || s.padding || { all: 0 }),
-                baseClass   : PDFSection
-            });
+            var [header, footer] = [s.Header || s.header, s.Footer || s.footer];
+            if (header) this.setHeader(header, this.inheritedSettings);
+            if (footer) this.setFooter(footer, this.inheritedSettings);
+            var {content=[], position=(s.positions || null), padding={all: 0}, baseClass} = _.defaults({baseClass: PDFSection}, this, s);
+            var {Border, border=false, margin={all:0}, padding, baseClass, FillColor} = _.defaults({}, this, s, gs);
+            [Border, padding, margin] = [Border || border, new Offset(padding), new Offset(margin)];
+            var {overflowAction="split"} = _.defaults({}, s, gs);
+            if (FillColor) this.FillColor = FillColor;
+            _.assign(this, {content, position, Border, margin, padding, overflowAction, baseClass});
             if (this.constructor === PDFSection) this.initializeChildren();
             return this;
         };
         this.initializeChildren = function(){
             delete this.initSettings;
-            if (this.Header) this.Header.initialize(this.inheritedSettings);
-            if (this.Footer) this.Footer.initialize(this.inheritedSettings);
+            _.filter([this.Header, this.Footer]).forEach(el => el.initialize(this.inheritedSettings));
             _.forEach(this.content, c => c.initialize(this.inheritedSettings));
         };
         this.getHeaderHeight = function(){
@@ -317,8 +310,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         // Check if an object is a PDFSection
     
         this.getHeight = function(){
-            var contentHeight = 0;
-            var max = 0;
+            var [contentHeight, max] = [0, 0];
             if (this.constructor === ImageSection && _.isObject(this.image))
                 contentHeight = this.image.height;
             _.forEach(this.content, section => {
@@ -357,9 +349,7 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                 else return { status: "newPage", overflow: this };
             }
             var orig = availableSpace.clone();
-            PDF.setFont(this.Font);
-            PDF.setFontSize(this.FontSize);
-            
+            _.forEach(["Font", "FontSize"], key => _.invoke(PDF, `set${key}`, this[key]));            
             var baseHeight = this.getHeightWithoutContent();
             if (this.getHeight() > availableSpace.getHeight()) {
                 if (baseHeight > availableSpace.getHeight() || 
@@ -381,11 +371,8 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                     var usedHeight = this.getHeightWithoutContent();
                     nextPageSpace.offset( { y1: this.getHeightWithoutContent()});
                     availableSpace.offset({ y1: this.getHeightWithoutContent()});
-                    var i = 0;  // Max index element that fits
-                    var heights = [];
-                    var sums = [];
-                    var sum = 0;
-                    while ( this.content[i].getHeight() + usedHeight < availableSpace.getHeight()){
+                    var [i, heights, sums, sum] = [0, [], [], 0];  // i= Max index element that fits
+                    while (this.content[i].getHeight() + usedHeight < availableSpace.getHeight()){
                         availableSpace.offset( { y1: this.content[ i ].getHeight()});
                         heights[i] = this.content[i].getHeight();
                         sum += heights[i];
@@ -397,28 +384,21 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
                         return { status: "noSpace", overflow: this };
                     }
                     var nestedResult = this.content[i].splitToHeight(availableSpace.clone(), nextPageSpace.clone());
-                    if ( nestedResult.status === "newPage" )
+                    if (nestedResult.status === "newPage")
                         return { status: "newPage", overflow: this };
-                    if ( nestedResult.status === "noSpace" && i === 1 ){
+                    if (nestedResult.status === "noSpace" && i === 1){
                         return { status: "noSpace", overflow: this };
                     }
-                    result.toAdd = this.clone().setContent( _.take(this.content, i));
-                    if ( _.has(nestedResult, "toAdd") && !(_.isUndefined(nestedResult.toAdd) ))
-                        result.toAdd.addContent( nestedResult.toAdd );
-                    
-                    result.overflow = this.clone().setContent( [] );
-                    if ( _.has( nestedResult, "overflow" ) && !(_.isUndefined(nestedResult.overflow) ))
-                          result.overflow.addContent(nestedResult.overflow);
+                    result.toAdd = this.clone().setContent(_.take(this.content, i));
+                    if (_.has(nestedResult, "toAdd") && !(_.isUndefined(nestedResult.toAdd)))
+                        result.toAdd.addContent(nestedResult.toAdd);
+                    result.overflow = this.clone().setContent([]);
+                    if (_.has( nestedResult, "overflow") && !(_.isUndefined(nestedResult.overflow)))
+                        result.overflow.addContent(nestedResult.overflow);
                     result.overflow.addContent(_.drop(this.content, i + 1));
-
-
                     var nestedResult = this.content[i].splitToHeight(availableSpace.clone(), nextPageSpace.clone());
-                    result.toAdd = this.clone()
-                          .setContent( _.take(this.content, i))
-                          .addContent( nestedResult.toAdd );
-                    result.overflow = this.clone()
-                          .setContent( nestedResult.overflow )
-                          .addContent( _.drop(this.content, i + 1));
+                    result.toAdd    = this.clone().setContent(_.take(this.content, i)).addContent(nestedResult.toAdd);
+                    result.overflow = this.clone().setContent(nestedResult.overflow  ).addContent(_.drop(this.content, i + 1));
                     if (result.toAdd.getHeight() > orig.getHeight()) throw "Something went wrong in height calculation";
                     return result;
                 }
@@ -434,41 +414,32 @@ var RowSection, TextSection, ColumnSection, PDFDocument, PDFSection, ImageSectio
         };
     
         this.renderBorderAndFill = function(renderSpace){
-            var drawDim   = renderSpace.clone();
-            var hasFill   = _.has(this, "FillColor");
-            var hasBorder = _.has(this, "Border") && this.Border === true;
-            var borderStyles = this.getBorderStyles();
+            var [drawDim, hasFill, hasBorder, borderStyles] = [renderSpace.clone(), _.has(this, "FillColor"), _.get(this, "Border") === true, this.getBorderStyles()];
             if (hasFill || hasBorder){
-                this.setStyles( borderStyles );
-                var x1 = drawDim.x1, 
-                    y1 = drawDim.y1, 
-                    width = drawDim.getWidth(), 
-                    height = drawDim.getHeight();
-                if (hasFill && hasBorder) PDF.rect(x1, y1, width, height, "FD");
-                else if (hasFill) PDF.rect(x1, y1, width, height, "F");
-                else PDF.rect(x1, y1, width, height); // hasBorder
+                this.setStyles(borderStyles);
+                var [{x1, y1}, width, height] = [drawDim, drawDim.getWidth(), drawDim.getHeight()];
+                var fill_border = [...((hasFill && hasBorder)? ["FD"] : (hasFill ? ["F"] : []))];
+                PDF.rect(x1, y1, width, height, ...fill_border);
             }
             return this;
         };
     
         this.render = function(renderSpace){ 
-            var drawDim = _.isNil(this.position) 
-                    ? renderSpace.clone()
-                    : renderSpace.clone().translate(this.position.x1, this.position.y1);
-            drawDim.setHeight(this.getHeight());
-            drawDim.setWidth(this.getWidth());
+            var drawDim = renderSpace.clone();
+            if (_.isNil(this.position)) drawDim = drawDim.translate(this.position.x1, this.position.y1);
+            _.forEach(["Height", "Width"], key => _.invoke(drawDim, `set${key}`, this[`get${key}`]));
             drawDim.offset(this.margin);
             var styles  = this.getStyles();
             this.renderBorderAndFill(drawDim);    
             this.setStyles(styles);
             if (isPDFSection(this.Header)){
-                this.Header.render( drawDim.clone() );
+                this.Header.render(drawDim.clone());
                 drawDim.offset({ y1: this.Header.getHeight() });
             }
             if (isPDFSection(this.Footer)){
-                var footerSpace = drawDim.clone().setHeight( this.Footer.getHeight(), true);
-                this.Footer.render( footerSpace );
-                drawDim.offset( { y2: this.Footer.getHeight() } );
+                var footerSpace = drawDim.clone().setHeight(this.Footer.getHeight(), true);
+                this.Footer.render(footerSpace);
+                drawDim.offset({ y2: this.Footer.getHeight() });
             }
             drawDim.offset( this.padding );
             var contentSpace = drawDim.clone();
